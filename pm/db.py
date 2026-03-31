@@ -7,6 +7,8 @@ from typing import Any, Optional
 
 import sqlite3
 
+from .gc import _is_tmp_expired
+
 # Try to load sqlite-vec extension
 try:
     import sqlite_vec
@@ -62,7 +64,7 @@ def init_db(db_path: Path) -> None:
         # sqlite-vec virtual table (graceful fallback if vec not available)
         if VEC_AVAILABLE:
             try:
-                conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0()")
+                conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(memory_id TEXT, embedding FLOAT[1024])")
             except Exception:
                 pass  # Table may already exist with different schema
 
@@ -123,7 +125,7 @@ def _add_embedding_vec(conn: sqlite3.Connection, memory_id: str, embedding: list
         # Serialize embedding as binary blob
         vec_blob = _serialize_vector(embedding)
         conn.execute(
-            "INSERT INTO memories_vec (rowid, embedding) VALUES ((SELECT rowid FROM memories WHERE id = ?), ?)",
+            "INSERT INTO memories_vec (memory_id, embedding) VALUES (?, ?)",
             (memory_id, vec_blob)
         )
     except Exception:
@@ -166,7 +168,7 @@ def search_memories(
                 rows = conn.execute(f"""
                     SELECT m.*, vector_distance_cosine(mv.embedding, ?) AS score
                     FROM memories_vec mv
-                    JOIN memories m ON m.rowid = mv.rowid
+                    JOIN memories m ON m.id = mv.memory_id
                     WHERE {where_clause}
                     ORDER BY score ASC
                     LIMIT ?
@@ -246,7 +248,7 @@ def gc_expired(db_path: Path, tmp_dir: Path) -> list[str]:
         if VEC_AVAILABLE:
             for rid in removed:
                 try:
-                    conn.execute("DELETE FROM memories_vec WHERE rowid = (SELECT rowid FROM memories WHERE id = ?)", (rid,))
+                    conn.execute("DELETE FROM memories_vec WHERE memory_id = ?", (rid,))
                 except Exception:
                     pass
 
@@ -257,7 +259,7 @@ def gc_expired(db_path: Path, tmp_dir: Path) -> list[str]:
     # Also clean up tmp files that exist but have no DB record
     if tmp_dir.exists():
         for f in tmp_dir.glob("TMP-*.md"):
-            if _is_tmp_expired(f):
+            if _is_tmp_expired(f, now):
                 f.unlink()
                 removed.append(f.stem)
 
