@@ -14,18 +14,13 @@ project-manager/
 │   │   └── MS-{序号}.md
 │   ├── releases/                  # 发布记录（索引）
 │   │   └── REL-{版本}.md
-│   ├── demands/                   # 官方需求池（索引）— 所有成员共享
-│   └── changes/                  # 需求/设计变更（索引）
+│   └── demands/                   # 官方需求池（索引）— 含变更记录
 └── {user}/                        # 用户私有工作区（用户隔离，索引）
-    ├── laws/                      # 开发原则（索引）
-    ├── daily/                     # 开发日志（索引）
-    ├── demands/                   # 个人需求/子任务（索引）— 隔离于官方需求池
-    ├── problems/                  # 问题记录（索引）
-    ├── decisions/                 # 技术决策 ADR（索引）
-    ├── meetings/                  # 会议记录（索引）
-    ├── knowledge/                 # 知识库（索引）
-    ├── risks/                     # 风险记录（索引）
-    ├── references/                # 参考资料链接（索引）
+    ├── principles/               # 开发原则 + 技术决策（索引）
+    ├── daily/                     # 开发日志（索引）— 含变更详情
+    ├── demands/                   # 个人需求/子任务（索引）
+    ├── concerns/                  # 问题 + 风险（索引）
+    ├── knowledge/                 # 知识库 + 参考资料（索引）
     └── tmp/                       # 临时指令（物理删除，不建索引）
 ```
 
@@ -41,34 +36,47 @@ project-manager/
 | 里程碑 | share/milestones/ | 关键节点 | 是 | 永久 | MS- |
 | 发布记录 | share/releases/ | 版本历史 | 是 | 永久 | REL- |
 | 官方需求 | share/demands/ | 需求池，所有成员共享 | 是 | 永久 | DMD- |
-| 需求变更 | share/changes/ | 需求/设计变更 | 是 | 永久 | CHG- |
 
 ### 用户私有工作区（{user}/）
 
 | 类别 | 目录 | 用途 | 索引 | 清理策略 | ID前缀 |
 |------|------|------|------|----------|--------|
-| 开发原则 | {user}/laws/ | 必须遵循的规则 | 是 | 永久 | - |
-| 开发日志 | {user}/daily/ | 每日工作记录 | 是 | 永久 | - |
+| 开发原则 | {user}/principles/ | 规则 + ADR 决策 | 是 | 永久 | - |
+| 开发日志 | {user}/daily/ | 每日工作记录（包含变更详情） | 是 | 永久 | - |
 | 个人需求 | {user}/demands/ | 个人任务分解、子任务 | 是 | 永久 | DMD- |
-| 问题记录 | {user}/problems/ | Bug、技术问题 | 是 | 解决后归档 | PRB- |
-| 技术决策 | {user}/decisions/ | ADR 架构决策 | 是 | 永久 | ADR- |
-| 会议记录 | {user}/meetings/ | 需求/技术评审 | 是 | 永久 | - |
-| 知识库 | {user}/knowledge/ | 业务/技术知识 | 是 | 永久 | - |
-| 风险记录 | {user}/risks/ | 风险识别与应对 | 是 | 关闭后归档 | RSK- |
-| 参考资料 | {user}/references/ | 链接、文档 | 是 | 永久 | - |
+| 问题/风险 | {user}/concerns/ | Bug、问题、风险识别与应对 | 是 | 关闭后归档 | CSK- |
+| 知识库 | {user}/knowledge/ | 业务/技术知识、参考资料 | 是 | 永久 | - |
 | 临时指令 | {user}/tmp/ | 短期约束 | 否 | **物理删除（不建索引）** | - |
 
-### 核心 5 项能力
+---
 
-为降低复杂度，MVP 阶段聚焦以下核心类型：
+## 精简说明
 
-| 类别 | 目录 | 用途 | ID前缀 |
-|------|------|------|--------|
-| 需求记录 | share/demands/ + {user}/demands/ | 需求池 + 个人任务 | DMD- |
-| 问题记录 | {user}/problems/ | Bug、技术问题 | PRB- |
-| 技术决策 | {user}/decisions/ | ADR 架构决策 | ADR- |
-| 开发日志 | {user}/daily/ | 每日工作记录 | - |
-| 需求变更 | share/changes/ | 需求/设计变更 | CHG- |
+### 合并策略
+
+| 合并项 | 合并结果 | 说明 |
+|--------|----------|------|
+| laws + decisions | `principles/` | 规则与 ADR 统一为「原则」 |
+| changes + demands | `demands/` | 变更详情记录在 daily 中，demands 保留变更属性 |
+| problems + risks | `concerns/` | 「关注点」覆盖问题和风险，ID前缀 CSK- |
+| references + knowledge | `knowledge/` | 参考资料并入知识库 |
+| meetings | **删除** | 会议记录可写入 daily 或 knowledge |
+| ~~meetings~~ | — | — |
+
+### demands 中的变更处理
+
+demands 记录通过 `extension` 字段携带变更属性：
+
+```json
+{
+  "type": "change",
+  "change_reason": "合规要求",
+  "change_impact": "需增加水印",
+  "approver": "PM-xxx"
+}
+```
+
+变更的详细过程记录在 `daily/` 中，而非单独文件。
 
 ---
 
@@ -88,16 +96,13 @@ share/demands/  ←→  {user}/demands/
 
 两者**不自动同步**，如果需要将个人成果贡献回官方需求池，由 PM 手动录入 `share/demands/`。
 
-### demands、changes、releases 三者定位区分
+### demands、releases 定位区分
 
-| 维度 | demands（需求） | changes（变更） | releases（发布） |
-|------|----------------|----------------|-----------------|
-| 关注点 | 需求内容本身 | 变更控制流程 | 发布结果记录 |
-| 时间节点 | 需求提出时 | 变更发生时 | 版本发布时 |
-| 核心字段 | 描述、验收标准、技术方案 | 变更原因、影响范围、审批人、回滚方案 | 版本号、发布日期、变更内容 |
-| 示例 | "用户需要导出报表功能" | "因合规要求，导出功能需增加水印" | "v1.2.0 发布，新增导出功能" |
-
-**关系链**：demand → change → release（需求经变更后发布）
+| 维度 | demands（需求） | releases（发布） |
+|------|----------------|-----------------|
+| 关注点 | 需求内容本身 | 发布结果记录 |
+| 时间节点 | 需求提出/变更时 | 版本发布时 |
+| 核心字段 | 描述、验收标准、技术方案、变更属性 | 版本号、发布日期、变更内容 |
 
 ---
 
@@ -124,7 +129,7 @@ share/demands/  ←→  {user}/demands/
 
 ```sql
 CREATE TABLE memories (
-    id            TEXT PRIMARY KEY,          -- 记忆ID，如 PRB-001, ADR-002
+    id            TEXT PRIMARY KEY,          -- 记忆ID，如 CSK-001
     category      TEXT NOT NULL,             -- 记忆类别
     user_id       TEXT,                      -- 用户ID（share目录下为NULL）
     file_path     TEXT NOT NULL,             -- 文件路径（相对于project-manager/）
@@ -190,11 +195,9 @@ dependencies = [
 (share_dir / "milestones").mkdir(parents=True, exist_ok=True)
 (share_dir / "releases").mkdir(parents=True, exist_ok=True)
 (share_dir / "demands").mkdir(parents=True, exist_ok=True)
-(share_dir / "changes").mkdir(parents=True, exist_ok=True)
 
 # 创建用户目录
-user_dirs = ["laws", "daily", "demands", "problems", "decisions", "meetings",
-              "knowledge", "risks", "references", "tmp"]
+user_dirs = ["principles", "daily", "demands", "concerns", "knowledge", "tmp"]
 ```
 
 ### Step 3: 文档更新
@@ -218,13 +221,13 @@ cd cli/pm && uv pip install -e . && pm --version
 # 2. 初始化测试
 pm init --user test01
 # 验证目录结构：
-# - share/projects/, share/demands/, share/changes/ 文件夹存在
-# - test01/demands/, test01/problems/ 等用户目录存在
+# - share/projects/, share/demands/ 文件夹存在
+# - test01/principles/, test01/daily/, test01/concerns/, test01/knowledge/ 等用户目录存在
 
 # 3. 功能测试
 pm log --content "测试日志"
-pm demand --title "测试需求" --content "描述内容"
-pm problem --content "问题描述" --priority P1
+pm demand --content "测试需求"
+pm concern --content "问题描述" --priority P1
 
 # 4. 边界测试
 pm init --user test01 --force  # 覆盖测试
