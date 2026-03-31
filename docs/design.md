@@ -19,7 +19,7 @@ project-manager/
     ├── principles/               # 开发原则 + 技术决策（索引）
     ├── daily/                     # 开发日志（索引）— 含变更详情
     ├── demands/                   # 个人需求/子任务（索引）
-    ├── concerns/                  # 问题 + 风险（索引）
+    ├── issues/                  # 问题 + 风险（索引）
     ├── knowledge/                 # 知识库 + 参考资料（索引）
     └── tmp/                       # 临时指令（物理删除，不建索引）
 ```
@@ -44,7 +44,7 @@ project-manager/
 | 开发原则 | {user}/principles/ | 规则 + ADR 决策 | 是 | 永久 | - |
 | 开发日志 | {user}/daily/ | 每日工作记录（包含变更详情） | 是 | 永久 | - |
 | 个人需求 | {user}/demands/ | 个人任务分解、子任务 | 是 | 永久 | DMD- |
-| 问题/风险 | {user}/concerns/ | Bug、问题、风险识别与应对 | 是 | 关闭后归档 | CSK- |
+| 问题/风险 | {user}/issues/ | Bug、问题、风险识别与应对 | 是 | 关闭后归档 | CSK- |
 | 知识库 | {user}/knowledge/ | 业务/技术知识、参考资料 | 是 | 永久 | - |
 | 临时指令 | {user}/tmp/ | 短期约束 | 否 | **物理删除（不建索引）** | - |
 
@@ -58,7 +58,7 @@ project-manager/
 |--------|----------|------|
 | laws + decisions | `principles/` | 规则与 ADR 统一为「原则」 |
 | changes + demands | `demands/` | 变更详情记录在 daily 中，demands 保留变更属性 |
-| problems + risks | `concerns/` | 「关注点」覆盖问题和风险，ID前缀 CSK- |
+| problems + risks | `issues/` | 「关注点」覆盖问题和风险，ID前缀 CSK- |
 | references + knowledge | `knowledge/` | 参考资料并入知识库 |
 | meetings | **删除** | 会议记录可写入 daily 或 knowledge |
 | ~~meetings~~ | — | — |
@@ -197,7 +197,7 @@ dependencies = [
 (share_dir / "demands").mkdir(parents=True, exist_ok=True)
 
 # 创建用户目录
-user_dirs = ["principles", "daily", "demands", "concerns", "knowledge", "tmp"]
+user_dirs = ["principles", "daily", "demands", "issues", "knowledge", "tmp"]
 ```
 
 ### Step 3: 文档更新
@@ -222,7 +222,7 @@ cd cli/pm && uv pip install -e . && pm --version
 pm init --user test01
 # 验证目录结构：
 # - share/projects/, share/demands/ 文件夹存在
-# - test01/principles/, test01/daily/, test01/concerns/, test01/knowledge/ 等用户目录存在
+# - test01/principles/, test01/daily/, test01/issues/, test01/knowledge/ 等用户目录存在
 
 # 3. 功能测试
 pm log --content "测试日志"
