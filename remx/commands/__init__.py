@@ -1,1 +1,1 @@
-"""Remx CLI commands."""
+"""RemX CLI commands."""

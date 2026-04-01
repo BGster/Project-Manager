@@ -1,4 +1,4 @@
-"""Database operations for Remx v2 (SQLite + sqlite-vec)."""
+"""Database operations for RemX v2 (SQLite + sqlite-vec)."""
 import json
 import struct
 from datetime import datetime, timedelta, timezone

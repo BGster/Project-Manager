@@ -1,4 +1,4 @@
-# Remx Skill
+# RemX Skill
 
 项目记忆与知识管理工具。
 

@@ -1,4 +1,4 @@
-"""Remx v2 — data-driven project memory management.
+"""RemX v2 — data-driven project memory management.
 
 Phase 1: CLI engine layer (parse / init / index / gc / retrieve).
 """
