@@ -442,7 +442,7 @@ def chunk_paragraphs_simple(
 
     # Guard: overlap must be less than chunk size to avoid no-progress loop
     if overlap_paras >= chunk_size_paras:
-        print(f"[pm chunker] WARNING: overlap_paras ({overlap_paras}) >= chunk_size_paras "
+        print(f"[remx chunker] WARNING: overlap_paras ({overlap_paras}) >= chunk_size_paras "
               f"({chunk_size_paras}); setting overlap to 0", file=sys.stderr)
         effective_overlap = 0
     else:
