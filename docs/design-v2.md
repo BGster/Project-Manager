@@ -183,7 +183,7 @@ CREATE TABLE memories (
 
 -- chunk 表（段落级索引）
 CREATE TABLE chunks (
-    chunk_id    TEXT PRIMARY KEY,      -- "demands/feature-A.md#chunk[0]"
+    chunk_id    TEXT PRIMARY KEY,      -- "project::demands/feature-A.md::0" or "global::~/notes.md::0"
     parent_id   TEXT NOT NULL,        -- 溯源到 memories.id
     chunk_index INTEGER,              -- chunk 在文件内的序号
     content     TEXT NOT NULL,        -- 原始文本（用于展示和重嵌入）
@@ -401,8 +401,21 @@ chunk:
 
 ### 6.5 chunk_id 格式
 
-`{file_path}::{chunk_index}`
-示例：`demands/feature-A.md::0`
+```
+project::{relative_path}::{chunk_index}   -- 项目记忆（相对路径）
+global::{display_path}::{chunk_index}    -- 全局记忆（~/ 或绝对路径）
+
+示例：
+  project::demands/feature-A.md::0       -- 项目内文件
+  global::~/notes/idea.md::0             -- 全局记忆（~ 展开）
+  global::/tmp/export.md::0              -- 全局记忆（绝对路径）
+```
+
+**路径前缀约定：**
+- `~` 或 `/` 开头 → global 记忆
+- 其他（相对路径）→ project 记忆
+
+**安全：路径含 `..` → 拒绝索引**（防止目录遍历）
 
 ### 6.6 Chunk 数据结构
 
@@ -459,7 +472,7 @@ filter 只做字段级等值/范围筛选，CLI 翻译为 SQL WHERE 子句。返
 ```json
 [
   {
-    "chunk_id": "demands/feature-A.md#chunk[1]",
+    "chunk_id": "project::demands/feature-A.md::1",
     "parent_id": "DMD-001",
     "category": "demand",
     "priority": "P1",

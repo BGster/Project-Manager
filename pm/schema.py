@@ -113,12 +113,20 @@ class MetaYaml(BaseModel):
 
     # ─── Lookup helpers ────────────────────────────────────────────────────────
 
-    def find_scope(self, file_path: Path) -> Optional[IndexScope]:
-        """Find the first matching index_scope for a file path."""
+    def find_scope(self, file_path: Path, meta_yaml_dir: Path = None) -> Optional[IndexScope]:
+        """Find the first matching index_scope for a file path.
+        
+        scope.path is resolved relative to meta_yaml_dir (or file_path's parent if not given).
+        """
+        base = meta_yaml_dir or file_path.parent
         for scope in self.index_scope:
-            scope_path = Path(scope.path)
+            # Resolve scope path relative to base directory
+            if Path(scope.path).is_absolute():
+                scope_path = Path(scope.path)
+            else:
+                scope_path = (base / scope.path).resolve()
             try:
-                rel = file_path.relative_to(scope_path)
+                rel = file_path.resolve().relative_to(scope_path)
                 # Match pattern loosely (glob-style)
                 import fnmatch
                 if fnmatch.fnmatch(rel.name, scope.pattern) or fnmatch.fnmatch(rel.name, "*" + scope.pattern.replace("*.", "")):

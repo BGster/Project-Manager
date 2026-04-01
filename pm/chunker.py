@@ -3,7 +3,11 @@
 Splits a markdown file into paragraphs, then groups paragraphs into chunks
 respecting max_tokens (soft limit) with paragraph-level overlap.
 
-chunk_id format: {file_path}::{chunk_index}
+chunk_id format:
+  global::{display_path}::{chunk_index}   -- global memory (~ or / prefix)
+  project::{relative_path}::{chunk_index} -- project memory (relative path)
+
+Security: paths containing '..' are rejected to prevent directory escape.
 """
 import re
 import tiktoken
@@ -12,6 +16,41 @@ from pathlib import Path
 from typing import Optional
 
 from .storage import parse_front_matter
+
+
+# ─── Path utilities ──────────────────────────────────────────────────────────
+
+def _normalize_path(path: str) -> str:
+    """Normalize a file path, expanding ~ to home directory.
+    
+    Raises ValueError if path contains '..' (directory escape attempt).
+    """
+    if ".." in path:
+        raise ValueError(f"Path with '..' is not allowed: {path}")
+    if path.startswith("~"):
+        return str(Path(path).expanduser().resolve())
+    return path
+
+
+def _is_global_path(path: str) -> bool:
+    """Return True if path is global (starts with ~ or /)."""
+    return path.startswith("~") or path.startswith("/")
+
+
+def make_chunk_id(file_path: str, chunk_index: int) -> str:
+    """Generate a chunk_id with global:: or project:: prefix.
+    
+    chunk_id format:
+      global::{display}::{chunk_index}   -- ~ or / prefix
+      project::{relative}::{chunk_index} -- relative path
+    """
+    home = str(Path.home())
+    if _is_global_path(file_path):
+        # Display path: replace home with ~
+        display = file_path.replace(home, "~") if file_path.startswith(home) else file_path
+        return f"global::{display}::{chunk_index}"
+    else:
+        return f"project::{file_path}::{chunk_index}"
 
 
 @dataclass
@@ -121,7 +160,7 @@ def _make_chunks(
             # First, flush current chunk if non-empty
             if current_paras:
                 chunk_text = "\n\n".join(current_paras)
-                chunk_id = f"{file_path}::{chunk_index}"
+                chunk_id = make_chunk_id(file_path, chunk_index)
                 chunks.append(Chunk(
                     chunk_id=chunk_id,
                     content=chunk_text,
@@ -141,7 +180,7 @@ def _make_chunks(
                 if sub_token_count + sent_tokens >= max_tokens and sub_paras:
                     # Emit sub-chunk
                     sub_text = "".join(sub_paras)
-                    sub_chunk_id = f"{file_path}::{chunk_index}"
+                    sub_chunk_id = make_chunk_id(file_path, chunk_index)
                     chunks.append(Chunk(
                         chunk_id=sub_chunk_id,
                         content=sub_text,
@@ -163,7 +202,7 @@ def _make_chunks(
         if current_token_count + para_tokens > max_tokens and current_paras:
             # Finalize current chunk
             chunk_text = "\n\n".join(current_paras)
-            chunk_id = f"{file_path}::{chunk_index}"
+            chunk_id = make_chunk_id(file_path, chunk_index)
             chunks.append(Chunk(
                 chunk_id=chunk_id,
                 content=chunk_text,
@@ -184,7 +223,7 @@ def _make_chunks(
     # Flush remaining
     if current_paras:
         chunk_text = "\n\n".join(current_paras)
-        chunk_id = f"{file_path}::{chunk_index}"
+        chunk_id = make_chunk_id(file_path, chunk_index)
         chunks.append(Chunk(
             chunk_id=chunk_id,
             content=chunk_text,
@@ -269,7 +308,7 @@ def chunk_by_headings(
         nonlocal _chunk_index
         chunk_text = "\n\n".join(chunk_paras)
         chunks.append(Chunk(
-            chunk_id=f"{file_path}::{_chunk_index}",
+            chunk_id=make_chunk_id(file_path, _chunk_index),
             content=chunk_text,
             para_indices=[],
             token_count=tokens,
@@ -352,7 +391,7 @@ def _split_by_sentences(
 
         if current_tokens + sent_tokens >= max_tokens and current:
             chunk_text = "".join(current)
-            chunk_id = f"{file_path}::{chunk_index}"
+            chunk_id = make_chunk_id(file_path, chunk_index)
             chunks.append(Chunk(
                 chunk_id=chunk_id,
                 content=chunk_text,
@@ -370,7 +409,7 @@ def _split_by_sentences(
 
     if current:
         chunk_text = "".join(current)
-        chunk_id = f"{file_path}::{chunk_index}"
+        chunk_id = make_chunk_id(file_path, chunk_index)
         chunks.append(Chunk(
             chunk_id=chunk_id,
             content=chunk_text,
@@ -416,7 +455,7 @@ def chunk_paragraphs_simple(
         end = min(start + chunk_size_paras, len(paragraphs))
         chunk_paras = paragraphs[start:end]
         chunk_text = "\n\n".join(chunk_paras)
-        chunk_id = f"{file_path}::{chunk_index}"
+        chunk_id = make_chunk_id(file_path, chunk_index)
         chunks.append(Chunk(
             chunk_id=chunk_id,
             content=chunk_text,
