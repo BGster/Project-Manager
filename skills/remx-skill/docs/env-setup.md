@@ -42,19 +42,58 @@ uv pip install -e .
 
 ---
 
-## Linux（WSL / Ubuntu / Debian）
+## Linux（通用）
 
-### 1. 安装 Python 和 uv
+### 判断你的包管理器
 
+| 包管理器 | 发行版 |
+|----------|--------|
+| apt / dpkg | Debian, Ubuntu, Linux Mint, WSL (Debian/Ubuntu) |
+| dnf / yum | Fedora, RHEL, CentOS, AlmaLinux |
+| pacman | Arch Linux, Manjaro |
+| zypper | openSUSE |
+| apk | Alpine Linux |
+| Nix / NixOS | NixOS |
+
+### 1. 安装 Python
+
+**Debian / Ubuntu (apt)**
 ```bash
 sudo apt update
 sudo apt install python3.11-venv python3-pip
-
-# 安装 uv
-curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-### 2. 创建虚拟环境并安装
+**Fedora / RHEL / CentOS (dnf)**
+```bash
+sudo dnf install python3.11 python3.11-devel
+```
+
+**Arch Linux / Manjaro (pacman)**
+```bash
+sudo pacman -S python311 python311-pip
+```
+
+**openSUSE (zypper)**
+```bash
+sudo zypper install python311 python311-devel
+```
+
+**Alpine (apk)**
+```bash
+apk add python3 py3-pip python3-dev musl-dev gcc
+```
+
+### 2. 安装 uv
+
+```bash
+# 方式一：官方脚本（推荐，所有发行版通用）
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 方式二：通过 pip
+pip install uv
+```
+
+### 3. 创建虚拟环境并安装
 
 ```bash
 cd RemX/remx
