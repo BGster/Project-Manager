@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from .chunker import chunk_paragraphs_simple, chunk_by_headings, count_tokens
+from .chunker import chunk_paragraphs_simple, chunk_by_headings, count_tokens, _normalize_path, _is_global_path
 from .db import expires_at_stale, expires_at_ttl, now_iso, write_memory
 from .embedding import get_embedding
 from .schema import MetaYaml
@@ -43,7 +43,14 @@ def run_index(
     Returns:
         0 on success, 1 on error
     """
-    if not file_path.exists():
+    # ── 0. Normalize and validate path ─────────────────────────────────────────
+    try:
+        resolved_path = _normalize_path(str(file_path))
+    except ValueError as e:
+        print(f"pm index: {file_path}: {e}", file=sys.stderr)
+        return 1
+
+    if not Path(resolved_path).exists():
         print(f"pm index: {file_path}: file not found", file=sys.stderr)
         return 1
 
@@ -59,10 +66,27 @@ def run_index(
         return 1
 
     # ── 2. Find index_scope ────────────────────────────────────────────────────
-    scope = meta.find_scope(file_path)
+    scope = meta.find_scope(file_path, meta_yaml_path.parent)
     category = None
     if scope:
         category = meta.scope_category(scope)
+
+    # ── 2b. Compute chunk_id path component ─────────────────────────────────────
+    # project memory: relative to scope path;  global memory: ~-prefixed display path
+    if scope:
+        try:
+            scope_resolved = (meta_yaml_path.parent / scope.path).resolve()
+            index_path = str(file_path.resolve().relative_to(scope_resolved))
+        except ValueError:
+            # file_path is not relative to scope.path — use as-is
+            index_path = str(file_path)
+    elif _is_global_path(str(file_path)):
+        # Global memory: display path with home replaced by ~
+        home = str(Path.home())
+        index_path = str(file_path).replace(home, "~")
+    else:
+        # Relative path not under any scope — treat as project
+        index_path = str(file_path)
 
     # ── 3. Parse front-matter ──────────────────────────────────────────────────
     text = file_path.read_text(encoding="utf-8")
@@ -94,7 +118,7 @@ def run_index(
         hl = meta.chunk.heading_levels if hasattr(meta.chunk, 'heading_levels') else [1, 2, 3]
         chunks = chunk_by_headings(
             paragraphs,
-            str(file_path),
+            index_path,
             max_tokens=max_tokens,
             overlap_paras=ov,
             heading_levels=hl,
@@ -105,7 +129,7 @@ def run_index(
         if cs <= 0:
             avg_para_tokens = max(1, sum(count_tokens(p) for p in paragraphs) // max(1, len(paragraphs)))
             cs = max(1, meta.chunk.max_tokens // avg_para_tokens)
-        chunks = chunk_paragraphs_simple(paragraphs, str(file_path), chunk_size_paras=cs, overlap_paras=ov)
+        chunks = chunk_paragraphs_simple(paragraphs, index_path, chunk_size_paras=cs, overlap_paras=ov)
 
     if not chunks:
         print(f"pm index: {file_path}: no content to index", file=sys.stderr)
