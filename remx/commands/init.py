@@ -1,4 +1,4 @@
-"""pm init command - initialize project directory structure."""
+"""remx init command - initialize project directory structure."""
 from pathlib import Path
 
 from rich.console import Console

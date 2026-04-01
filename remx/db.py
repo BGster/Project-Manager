@@ -115,7 +115,7 @@ def init_db(db_path: Path, vector_dimensions: int = 1024, reset: bool = False) -
             except Exception as e:
                 # vec0 may fail if sqlite-vec not compiled; continue without vector support
                 import sys
-                print(f"[pm] WARNING: could not create memories_vec: {e}", file=sys.stderr)
+                print(f"[remx] WARNING: could not create memories_vec: {e}", file=sys.stderr)
 
         # indexes
         for idx_sql in INDEXES:
@@ -369,7 +369,7 @@ def gc_purge(db_path: Path) -> dict[str, int]:
                 try:
                     conn.execute("DELETE FROM memories_vec WHERE chunk_id = ?", (row["chunk_id"],))
                 except Exception as e:
-                    print(f"[pm] WARNING: could not delete vector for {row['chunk_id']}: {e}", file=sys.stderr)
+                    print(f"[remx] WARNING: could not delete vector for {row['chunk_id']}: {e}", file=sys.stderr)
 
         # Delete chunks
         conn.execute("DELETE FROM chunks WHERE deprecated = 1")

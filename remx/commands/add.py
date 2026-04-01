@@ -56,7 +56,7 @@ def add_log(
     user_id = config.user.id
 
     if not user_id:
-        console.print("[red]Error: No user configured. Run 'pm init --user <name>' first.[/red]")
+        console.print("[red]Error: No user configured. Run 'remx init --user <name>' first.[/red]")
         return
 
     _run_gc(root, user_id)
