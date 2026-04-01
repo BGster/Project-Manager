@@ -1,4 +1,4 @@
-"""ID generation for Remx memory entries."""
+"""ID generation for RemX memory entries."""
 import random
 import string
 from pathlib import Path
