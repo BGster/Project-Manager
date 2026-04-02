@@ -1,6 +1,7 @@
 """Database operations for RemX v2 (SQLite + sqlite-vec)."""
 import json
 import struct
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -114,7 +115,6 @@ def init_db(db_path: Path, vector_dimensions: int = 1024, reset: bool = False) -
                 )
             except Exception as e:
                 # vec0 may fail if sqlite-vec not compiled; continue without vector support
-                import sys
                 print(f"[remx] WARNING: could not create memories_vec: {e}", file=sys.stderr)
 
         # indexes
@@ -218,29 +218,32 @@ def write_memory(
             list(memory.values()),
         )
 
-        # Insert new chunks
-        for ch in chunks:
-            conn.execute(
-                "INSERT INTO chunks (chunk_id, parent_id, chunk_index, content, created_at, updated_at, deprecated) "
-                "VALUES (?, ?, ?, ?, ?, ?, 0)",
-                (
-                    ch["chunk_id"],
-                    memory["id"],
-                    ch["chunk_index"],
-                    ch["content"],
-                    now,
-                    now,
-                ),
-            )
-            if ch.get("embedding") and VEC_AVAILABLE:
-                vec_blob = serialize_vector(ch["embedding"])
+        # Insert new chunks using executemany for batch efficiency
+        chunk_rows = [
+            (ch["chunk_id"], memory["id"], ch["chunk_index"], ch["content"], now, now)
+            for ch in chunks
+        ]
+        conn.executemany(
+            "INSERT INTO chunks (chunk_id, parent_id, chunk_index, content, created_at, updated_at, deprecated) "
+            "VALUES (?, ?, ?, ?, ?, ?, 0)",
+            chunk_rows,
+        )
+
+        # Batch-insert vectors for chunks that have embeddings
+        if VEC_AVAILABLE:
+            vec_rows = [
+                (ch["chunk_id"], serialize_vector(ch["embedding"]))
+                for ch in chunks
+                if ch.get("embedding")
+            ]
+            if vec_rows:
                 try:
-                    conn.execute(
+                    conn.executemany(
                         "INSERT INTO memories_vec (chunk_id, embedding) VALUES (?, ?)",
-                        (ch["chunk_id"], vec_blob),
+                        vec_rows,
                     )
                 except Exception:
-                    pass
+                    pass  # vec table may not be available
 
         conn.commit()
     except Exception:
@@ -359,7 +362,6 @@ def gc_purge(db_path: Path) -> dict[str, int]:
             chunk_ids = conn.execute(
                 "SELECT chunk_id FROM chunks WHERE deprecated = 1"
             ).fetchall()
-            import sys
             for row in chunk_ids:
                 try:
                     conn.execute("DELETE FROM memories_vec WHERE chunk_id = ?", (row["chunk_id"],))
