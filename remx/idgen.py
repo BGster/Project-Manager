@@ -1,6 +1,7 @@
 """ID generation for RemX memory entries."""
 import random
 import string
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -29,7 +30,6 @@ def get_next_id(db_path: Path, category: str) -> str:
         return f"TMP-{_generate_short_id()}"
 
     if category == "daily":
-        from datetime import datetime
         return datetime.now().strftime("%Y-%m-%d")
 
     conn = get_db(db_path)
