@@ -22,13 +22,13 @@ from typing import Any, Optional
 import typer
 
 from . import __version__
-from .embedding import create_embedder
-from .gc_ import run_gc as gc_run
-from .index_ import run_index as index_run
-from .init_ import run_init as init_run
-from .parse import run_parse as parse_run
-from .retrieve_ import run_retrieve as retrieve_run
-from .schema import MetaYaml
+from .core.embedding import create_embedder
+from .core.schema import MetaYaml
+from .commands.gc import run_gc as gc_run
+from .commands.index import run_index as index_run
+from .commands.init import run_init as init_run
+from .commands.parse import run_parse as parse_run
+from .commands.retrieve import run_retrieve as retrieve_run
 
 app = typer.Typer(name="remx", no_args_is_help=True, invoke_without_command=False)
 console = typer.echo

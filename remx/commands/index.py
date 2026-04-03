@@ -6,11 +6,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from .chunker import chunk_paragraphs_simple, chunk_by_headings, count_tokens, _normalize_path, _is_global_path
-from .db import expires_at_stale, expires_at_ttl, now_iso, write_memory
-from .embedding import get_embedding
-from .schema import MetaYaml
-from .storage import parse_front_matter
+from ..core.chunker import chunk_paragraphs_simple, chunk_by_headings, count_tokens, _normalize_path, _is_global_path
+from ..core.db import expires_at_stale, expires_at_ttl, now_iso, write_memory
+from ..core.embedding import get_embedding
+from ..core.schema import MetaYaml
+from ..core.storage import parse_front_matter
 
 
 def run_index(

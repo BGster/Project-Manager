@@ -1,76 +1,48 @@
-"""remx init command - initialize project directory structure."""
+"""remx init command — create / rebuild all tables and vector index."""
+import sys
 from pathlib import Path
 
-from rich.console import Console
-from rich.tree import Tree
-
-from ..config import Config
-from ..db import init_db
-
-console = Console()
+from ..core.db import init_db
+from ..core.schema import MetaYaml
 
 
-def init_user(user: str, config_path: Path, force: bool = False) -> None:
-    """Initialize project structure for a user."""
-    root = config_path.parent.resolve()
+def run_init(
+    meta_yaml_path: Path,
+    db_path: Path,
+    reset: bool = False,
+) -> int:
+    """Initialize (or rebuild) database schema from meta.yaml.
 
-    # Load or create config
-    config = Config.load(config_path)
+    Args:
+        meta_yaml_path: path to meta.yaml
+        db_path: path to SQLite database
+        reset: if True, drop existing tables before creating
 
-    # Determine if this is a fresh init
-    is_fresh = not config_path.exists()
+    Returns:
+        0 on success, 1 on error
+    """
+    if not meta_yaml_path.exists():
+        print(f"remx init: {meta_yaml_path}: file not found", file=sys.stderr)
+        return 1
 
-    # Update config
-    config.user.id = user
-    config.user.workspace = f"{user}/"
-    config.project.root = "."
+    try:
+        meta = MetaYaml.load(meta_yaml_path)
+    except Exception as e:
+        print(f"remx init: {meta_yaml_path}: parse error — {e}", file=sys.stderr)
+        return 1
 
-    # Ensure user is in users list
-    if user not in config.users:
-        config.users.append(user)
+    dimensions = meta.vector.dimensions
 
-    config.save(config_path)
+    try:
+        init_db(db_path, vector_dimensions=dimensions, reset=reset)
+    except Exception as e:
+        print(f"remx init: {db_path}: failed to initialize database — {e}", file=sys.stderr)
+        return 1
 
-    # Create database if needed
-    db_path = root / "memory.db"
-    if not db_path.exists():
-        init_db(db_path)
+    action = "Rebuilt" if reset else "Created"
+    print(f"{action} database at {db_path}")
+    print(f"  Tables: memories, chunks")
+    print(f"  Vector table: memories_vec (dimensions={dimensions})")
+    print(f"  Indexes: created")
 
-    # Create share directories (always global)
-    share_dirs = [
-        root / "share" / "projects",
-        root / "share" / "milestones",
-        root / "share" / "meetings",
-        root / "share" / "issues",
-        root / "share" / "knowledge",
-    ]
-
-    # Create user-private directories
-    user_dirs = [
-        root / user / "principles",
-        root / user / "daily",
-        root / user / "demands",
-        root / user / "tmp",
-    ]
-
-    # Build tree output
-    tree = Tree(f"[bold]Initialized project for user:[/bold] [cyan]{user}[/cyan]")
-
-    share_tree = tree.add("[bold]share/[/bold]")
-    for d in share_dirs:
-        d.mkdir(parents=True, exist_ok=True)
-        share_tree.add(f"{d.name}/")
-
-    user_tree = tree.add(f"[bold]{user}/[/bold]")
-    for d in user_dirs:
-        d.mkdir(parents=True, exist_ok=True)
-        user_tree.add(f"{d.name}/")
-
-    info_tree = tree.add("[bold]Config & Data[/bold]")
-    info_tree.add(f"Config: {config_path.name}")
-    info_tree.add(f"Database: {db_path.name}")
-
-    console.print(tree)
-
-    if is_fresh:
-        console.print(f"\n[dim]Project root: {root}[/dim]")
+    return 0

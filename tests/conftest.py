@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from remx.db import get_db
+from remx.core.db import get_db
 
 
 @pytest.fixture
@@ -19,7 +19,7 @@ def temp_db():
 @pytest.fixture
 def db_with_schema(temp_db):
     """Create a temporary database with schema initialized."""
-    from remx.init_ import run_init
+    from remx.commands.init import run_init
 
     # Create minimal meta.yaml for init
     with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
