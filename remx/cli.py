@@ -5,14 +5,14 @@ Implements 5 commands:
   remx init [--reset] [--db <path>] [--meta <path>]
   remx index <path> [--db <path>] [--meta <path>]
   remx gc [--scope <path>] [--dry-run] [--purge] [--db <path>]
-  remx retrieve --filter <json> [--db <path>] [--no-content] [--limit <n>]
+  remx retrieve [--filter <json>] [--query <text>] [--db <path>] [--limit <n>]
 
 Usage as library:
-  from pm.parse import run_parse
-  from pm.init_ import run_init
-  from pm.index_ import run_index
-  from pm.gc_ import run_gc
-  from pm.retrieve_ import run_retrieve
+  from remx.commands.parse import run_parse
+  from remx.commands.init import run_init
+  from remx.commands.index import run_index
+  from remx.commands.gc import run_gc
+  from remx.commands.retrieve import run_retrieve
 """
 import json
 import sys
@@ -158,19 +158,60 @@ def gc_cmd(
 
 @app.command("retrieve")
 def retrieve_cmd(
-    filter: str = typer.Option(..., "--filter", help="JSON filter object"),
+    filter: Optional[str] = typer.Option(None, "--filter", help="JSON filter object"),
     db: Path = typer.Option(Path("memory.db"), "--db", help="Database path"),
+    meta: Path = typer.Option(Path("meta.yaml"), "--meta", help="meta.yaml path"),
     no_content: bool = typer.Option(False, "--no-content", help="Skip chunk content in output"),
     limit: int = typer.Option(50, "--limit", help="Max results"),
+    query: Optional[str] = typer.Option(None, "--query", help="Natural language query for semantic search"),
+    decay_weight: float = typer.Option(0.5, "--decay-weight", help="Decay weight in semantic score (0=no decay, 1=no vector)"),
+    no_embed: bool = typer.Option(False, "--no-embed", help="Skip embedding (use with --filter only)"),
 ):
-    """Retrieve memories by filter, return JSON array."""
-    try:
-        filter_dict = json.loads(filter)
-    except json.JSONDecodeError as e:
-        print(f"remx retrieve: invalid --filter JSON — {e}", file=sys.stderr)
+    """Retrieve memories by filter and/or semantic query, return JSON array.
+
+    Semantic search: --query <text> [--decay-weight 0.0-1.0]
+    Filter only: --filter '{"category": "demand"}'
+    Combined: both filter and query
+    """
+    if not filter and not query:
+        print("remx retrieve: must provide --filter or --query (or both)", file=sys.stderr)
         raise typer.Exit(code=1)
 
-    rc = retrieve_run(db, filter_dict, include_content=not no_content, limit=limit)
+    filter_dict = None
+    if filter:
+        try:
+            filter_dict = json.loads(filter)
+        except json.JSONDecodeError as e:
+            print(f"remx retrieve: invalid --filter JSON — {e}", file=sys.stderr)
+            raise typer.Exit(code=1)
+
+    embedder = None
+    if query and not no_embed:
+        try:
+            meta_cfg = MetaYaml.load(meta)
+        except Exception as e:
+            print(f"remx retrieve: {meta}: parse error — {e}", file=sys.stderr)
+            raise typer.Exit(code=1)
+        emb_cfg = meta_cfg.embedder
+        embedder = create_embedder(
+            provider=emb_cfg.provider if emb_cfg else "ollama",
+            model=emb_cfg.model if emb_cfg else "bge-m3",
+            dimension=meta_cfg.vector.dimensions,
+            base_url=emb_cfg.base_url if emb_cfg else "http://localhost:11434",
+            timeout=emb_cfg.timeout if emb_cfg else 60,
+            api_key=emb_cfg.api_key if emb_cfg else None,
+        )
+
+    rc = retrieve_run(
+        db,
+        filter=filter_dict,
+        include_content=not no_content,
+        limit=limit,
+        query=query,
+        meta_yaml_path=meta if query else None,
+        embedder=embedder,
+        decay_weight=decay_weight,
+    )
     raise typer.Exit(code=rc)
 
 

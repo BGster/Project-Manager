@@ -1,5 +1,6 @@
 """Database operations for RemX v2 (SQLite + sqlite-vec)."""
 import json
+import math
 import struct
 import sys
 from datetime import datetime, timedelta, timezone
@@ -25,8 +26,10 @@ def get_db(db_path: Path) -> sqlite3.Connection:
         conn.enable_load_extension(True)
         try:
             sqlite_vec.load(conn)
-        except Exception:
-            pass
+        except Exception as e:
+            import sys
+
+            print(f"[remx] WARNING: sqlite-vec extension not available — vector features disabled ({e})", file=sys.stderr)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
@@ -96,8 +99,8 @@ def init_db(db_path: Path, vector_dimensions: int = 1024, reset: bool = False) -
             conn.execute("DROP TABLE IF EXISTS memories")
             try:
                 conn.execute("DROP TABLE IF EXISTS memories_vec")
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[remx] WARNING: could not drop memories_vec: {e}", file=sys.stderr)
 
         # memories table
         conn.execute(f"CREATE TABLE IF NOT EXISTS memories ({MEMORIES_COL_DEFS})")
@@ -167,8 +170,8 @@ def write_chunk(
                     "INSERT INTO memories_vec (chunk_id, embedding) VALUES (?, ?)",
                     (chunk_id, vec_blob),
                 )
-            except Exception:
-                pass  # vec table may not be available
+            except Exception as e:
+                print(f"[remx] WARNING: could not insert vector: {e}", file=sys.stderr)
         conn.commit()
     except Exception:
         conn.execute("ROLLBACK")
@@ -242,8 +245,8 @@ def write_memory(
                         "INSERT INTO memories_vec (chunk_id, embedding) VALUES (?, ?)",
                         vec_rows,
                     )
-                except Exception:
-                    pass  # vec table may not be available
+                except Exception as e:
+                    print(f"[remx] WARNING: could not batch-insert vectors: {e}", file=sys.stderr)
 
         conn.commit()
     except Exception:
@@ -254,6 +257,12 @@ def write_memory(
 
 
 # ─── GC ──────────────────────────────────────────────────────────────────────
+
+def _scope_clause(scope_path: Optional[Path]) -> tuple[str, list[Any]]:
+    if scope_path:
+        return "file_path LIKE ?", [str(scope_path) + "%"]
+    return "", []
+
 
 def gc_collect(
     db_path: Path,
@@ -270,11 +279,12 @@ def gc_collect(
     try:
         now = datetime.now(timezone.utc).isoformat()
         conditions = ["expires_at IS NOT NULL", "expires_at < ?", "deprecated = 0"]
-        params: list = [now]
+        params: list[Any] = [now]
 
-        if scope_path:
-            conditions.append("file_path LIKE ?")
-            params.append(str(scope_path) + "%")
+        scope_cond, scope_params = _scope_clause(scope_path)
+        if scope_cond:
+            conditions.append(scope_cond)
+            params.extend(scope_params)
 
         where = " AND ".join(conditions)
 
@@ -284,10 +294,11 @@ def gc_collect(
         ).fetchall()
 
         deprecated_conditions = ["deprecated = 1"]
-        deprecated_params: list = []
-        if scope_path:
-            deprecated_conditions.append("file_path LIKE ?")
-            deprecated_params.append(str(scope_path) + "%")
+        deprecated_params: list[Any] = []
+        dep_scope_cond, dep_scope_params = _scope_clause(scope_path)
+        if dep_scope_cond:
+            deprecated_conditions.append(dep_scope_cond)
+            deprecated_params.extend(dep_scope_params)
         deprecated_where = " AND ".join(deprecated_conditions)
         deprecated_rows = conn.execute(
             f"SELECT * FROM memories WHERE {deprecated_where}",
@@ -322,7 +333,7 @@ def gc_soft_delete(
 
         # Soft-delete expired memories
         conditions = ["expires_at IS NOT NULL", "expires_at < ?", "deprecated = 0"]
-        params: list = [now]
+        params: list[Any] = [now]
         if scope_path:
             conditions.append("file_path LIKE ?")
             params.append(str(scope_path) + "%")
@@ -406,7 +417,7 @@ def retrieve(
     conn = get_db(db_path)
     try:
         conditions = []
-        params: list = []
+        params: list[Any] = []
 
         # Handle special expires_at comparisons
         if "expires_at" in filter:
@@ -473,5 +484,218 @@ def expires_at_ttl(ttl_hours: int) -> str:
     return (datetime.now(timezone.utc) + timedelta(hours=ttl_hours)).isoformat()
 
 
-def expires_at_stale(days: int) -> str:
-    return (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+def expires_at_stale(days: int, updated_at: Optional[str] = None) -> str:
+    """Compute stale_after expiration: updated_at + days.
+
+    If updated_at is not provided, falls back to current time.
+    """
+    if updated_at is None:
+        ref = datetime.now(timezone.utc)
+    else:
+        ref = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+    return (ref + timedelta(days=days)).isoformat()
+
+
+# ─── Semantic Retrieval with Decay Scoring ───────────────────────────────────
+
+def compute_decay_factor(
+    category: str,
+    updated_at: Optional[str],
+    expires_at: Optional[str],
+    meta: Any,
+) -> float:
+    """Compute decay factor for a memory record.
+
+    Returns a score between 0.0 and 1.0:
+    - 1.0: fresh / no decay configured
+    - 0.0: fully expired
+    - between: partially decayed
+
+    Decay functions:
+    - never / no decay_group: 1.0
+    - ttl: linear decay from 1.0 to 0.0 over ttl_hours
+    - stale_after: exponential decay after stale_after days
+    """
+    dg = meta.decay_group_for(category)
+    if dg is None:
+        return 1.0
+
+    fn = dg.function
+    params = dg.params
+
+    now = datetime.now(timezone.utc)
+
+    if fn == "never":
+        return 1.0
+
+    elif fn == "ttl":
+        if not expires_at:
+            return 1.0
+        try:
+            exp = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        except ValueError:
+            return 1.0
+        ttl_hours = params.get("ttl_hours", 24)
+        remaining = (exp - now).total_seconds() / 3600
+        return max(0.0, min(1.0, remaining / ttl_hours))
+
+    elif fn == "stale_after":
+        if not updated_at:
+            return 1.0
+        try:
+            upd = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+        except ValueError:
+            return 1.0
+        days = params.get("days", 30)
+        stale_days = params.get("stale_days", 7)  # grace period before decay
+        days_since = (now - upd).total_seconds() / 86400
+        if days_since <= stale_days:
+            return 1.0
+        # Exponential decay: factor = exp(-rate * (days_since - stale_days))
+        rate = params.get("decay_rate", 0.1)
+        over = days_since - stale_days
+        return max(0.0, math.exp(-rate * over))
+
+    return 1.0
+
+
+def retrieve_semantic(
+    db_path: Path,
+    query_embedding: list[float],
+    meta: Any,
+    filter: Optional[dict[str, Any]] = None,
+    include_content: bool = True,
+    limit: int = 50,
+    decay_weight: float = 0.5,
+) -> list[dict[str, Any]]:
+    """Retrieve memories by semantic similarity + time decay scoring.
+
+    Score = (1 - decay_weight) * cosine_similarity + decay_weight * decay_factor
+
+    Args:
+        db_path: database path
+        query_embedding: embedded query vector
+        meta: MetaYaml config (for decay_groups and dimensions)
+        filter: optional SQL filter to narrow candidates before scoring
+        include_content: join with chunks table
+        limit: max raw vector results (before scoring, larger to allow filtering)
+        decay_weight: weight for decay factor in final score (0.0 to 1.0)
+    """
+    conn = get_db(db_path)
+    try:
+        vector_dim = meta.vector.dimensions
+        vec_blob = struct.pack(f"<{vector_dim}f", *query_embedding)
+
+        # Build optional WHERE clause from filter
+        conditions = []
+        params: list[Any] = []
+        if filter:
+            for key, val in filter.items():
+                if val is None:
+                    conditions.append(f"m.{key} IS NULL")
+                elif isinstance(val, list):
+                    placeholders = ", ".join(["?"] * len(val))
+                    conditions.append(f"m.{key} IN ({placeholders})")
+                    params.extend(val)
+                else:
+                    conditions.append(f"m.{key} = ?")
+                    params.append(val)
+            conditions.append("m.deprecated = 0")
+        else:
+            conditions.append("m.deprecated = 0")
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+        # Get candidate memories with their chunks
+        # First get matching memory IDs
+        candidate_ids = conn.execute(
+            f"""SELECT DISTINCT m.id FROM memories m
+                WHERE {where_clause}""",
+            params,
+        ).fetchall()
+        candidate_ids = [r["id"] for r in candidate_ids]
+
+        if not candidate_ids:
+            return []
+
+        # Search vector table for similar chunks among candidates
+        placeholders = ", ".join(["?"] * len(candidate_ids))
+        vec_rows = conn.execute(
+            f"""SELECT
+                    v.chunk_id,
+                    v.distance,
+                    c.parent_id,
+                    c.content,
+                    c.chunk_index,
+                    m.category,
+                    m.updated_at,
+                    m.expires_at,
+                    m.priority,
+                    m.status,
+                    m.file_path,
+                    m.chunk_count,
+                    m.id as memory_id
+                FROM memories_vec v
+                JOIN chunks c ON c.chunk_id = v.chunk_id
+                JOIN memories m ON m.id = c.parent_id
+                WHERE c.parent_id IN ({placeholders})
+                  AND m.deprecated = 0
+                ORDER BY v.distance ASC
+                LIMIT ?
+            """,
+            candidate_ids + [limit * 2],
+        ).fetchall()
+
+        if not vec_rows:
+            return []
+
+        # Compute scores
+        scored = []
+        for row in vec_rows:
+            # Convert distance to similarity (vec0 uses L2 distance)
+            # similarity = 1 / (1 + distance)
+            distance = row["distance"]
+            cosine_score = 1.0 / (1.0 + distance)
+
+            decay = compute_decay_factor(
+                category=row["category"],
+                updated_at=row["updated_at"],
+                expires_at=row["expires_at"],
+                meta=meta,
+            )
+            final_score = (1 - decay_weight) * cosine_score + decay_weight * decay
+            scored.append((final_score, row))
+
+        # Sort by score descending, take top N unique memories
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        # Deduplicate by memory_id (keep best chunk per memory)
+        seen = set()
+        results = []
+        for score, row in scored:
+            mid = row["memory_id"]
+            if mid in seen:
+                continue
+            seen.add(mid)
+            result = {
+                "id": row["memory_id"],
+                "category": row["category"],
+                "priority": row["priority"],
+                "status": row["status"],
+                "file_path": row["file_path"],
+                "chunk_count": row["chunk_count"],
+                "updated_at": row["updated_at"],
+                "expires_at": row["expires_at"],
+                "score": round(score, 6),
+                "chunk_id": row["chunk_id"],
+                "chunk_index": row["chunk_index"],
+            }
+            if include_content:
+                result["content"] = row["content"]
+            results.append(result)
+            if len(results) >= limit:
+                break
+
+        return results
+    finally:
+        conn.close()

@@ -140,13 +140,13 @@ def chunk_file(
 
 def chunk_content(
     content: str,
-    file_path: str,
+    file_path: Path,
     max_tokens: int = 512,
     overlap_paras: int = 0,
 ) -> list[Chunk]:
     """Chunk raw content text (no front-matter stripping)."""
     paragraphs = split_paragraphs(content)
-    return _make_chunks(paragraphs, file_path, max_tokens, overlap_paras)
+    return _make_chunks(paragraphs, str(file_path), max_tokens, overlap_paras)
 
 
 def _make_chunks(

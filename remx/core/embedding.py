@@ -1,8 +1,11 @@
 """Embedding provider for vector search."""
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 import httpx
+
+if TYPE_CHECKING:
+    from openai import OpenAI
 
 
 class Embedder(ABC):
@@ -56,7 +59,7 @@ class OpenAIEmbedder(Embedder):
         self.api_key = api_key
         self.model = model
         self.dimension = dimension
-        self._client: Optional[object] = None
+        self._client: Optional["OpenAI"] = None
 
     def _get_client(self):
         if self._client is None:
