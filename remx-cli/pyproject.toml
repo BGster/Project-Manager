@@ -2,7 +2,7 @@
 name = "remx"
 version = "0.2.0"
 description = "RemX — 配置驱动的项目外部记忆系统"
-readme = "README.md"
+readme = "../README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
@@ -41,7 +41,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-where = ["remx-cli/src"]
+where = ["src"]
 include = ["remx*"]
 exclude = ["remx.egg-info*", "build*", "docs*", "skills*", "tests*"]
 
