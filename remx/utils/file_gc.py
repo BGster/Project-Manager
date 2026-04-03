@@ -22,9 +22,10 @@ def gc_expired_files(tmp_dir: Path) -> list[str]:
             if _is_tmp_expired(f, now):
                 f.unlink()
                 removed.append(f.name)
-        except Exception:
-            # File corrupted or unreadable — skip
-            pass
+        except (FileNotFoundError, PermissionError):
+            pass  # expected — file already gone
+        except Exception as e:
+            print(f"[remx] WARNING: {e}", file=sys.stderr)
     return removed
 
 

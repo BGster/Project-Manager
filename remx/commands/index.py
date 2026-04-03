@@ -8,7 +8,7 @@ from typing import Optional
 
 from ..core.chunker import chunk_paragraphs_simple, chunk_by_headings, count_tokens, _normalize_path, _is_global_path
 from ..core.db import expires_at_stale, expires_at_ttl, now_iso, write_memory
-from ..core.embedding import get_embedding
+from ..core.embedding import get_embedding, Embedder
 from ..core.schema import MetaYaml
 from ..core.storage import parse_front_matter
 
@@ -17,7 +17,7 @@ def run_index(
     file_path: Path,
     meta_yaml_path: Path,
     db_path: Path,
-    embedder=None,
+    embedder: Optional[Embedder] = None,
     chunk_size_paras: int = 1,
     overlap_paras: int = 0,
     max_tokens: int = 512,
@@ -138,17 +138,19 @@ def run_index(
         print(f"remx index: {file_path}: no content to index", file=sys.stderr)
         return 1
 
-    # ── 5. Compute expires_at ───────────────────────────────────────────────────
-    expires_at = _compute_expires_at(meta, category, status)
-
-    # ── 6. Generate memory id ───────────────────────────────────────────────────
+    # ── 5. Build memory record ─────────────────────────────────────────────────
     # Idempotent: based on file_path to avoid duplicates on re-index
     file_path_str = str(file_path)
     memory_id = hashlib.sha256(file_path_str.encode()).hexdigest()[:16].upper()
-    # Prefix with category for readability
     memory_id = f"{category[:3].upper()}-{memory_id}"
 
-    # ── 7. Embed chunks ─────────────────────────────────────────────────────────
+    now = now_iso()
+    created_at = front_matter.get("created_at") or now
+    # For stale_after: expires_at is relative to updated_at (not creation time)
+    # We compute it here so expires_at_stale receives updated_at as reference
+    expires_at = _compute_expires_at(meta, category, status, updated_at=now)
+
+    # ── 6. Embed chunks ─────────────────────────────────────────────────────────
     chunk_dicts = [
         {
             "chunk_id": ch.chunk_id,
@@ -159,8 +161,7 @@ def run_index(
         for ch in chunks
     ]
 
-    # ── 8. Build memory record ─────────────────────────────────────────────────
-    now = now_iso()
+    # ── 7. Atomic write ───────────────────────────────────────────────────────
     memory = {
         "id": memory_id,
         "category": category,
@@ -200,8 +201,13 @@ def _compute_expires_at(
     meta: MetaYaml,
     category: str,
     status: Optional[str] = None,
+    updated_at: Optional[str] = None,
 ) -> Optional[str]:
-    """Compute expires_at from matching decay_group, or None."""
+    """Compute expires_at from matching decay_group, or None.
+
+    For ttl:     expires_at = now + ttl_hours
+    For stale_after: expires_at = updated_at + days  (relative to last update)
+    """
     dg = meta.decay_group_for(category, status)
     if not dg:
         return None
@@ -214,6 +220,6 @@ def _compute_expires_at(
         return expires_at_ttl(ttl_hours)
     elif fn == "stale_after":
         days = params.get("days", 30)
-        return expires_at_stale(days)
+        return expires_at_stale(days, updated_at)
     else:
         return None
