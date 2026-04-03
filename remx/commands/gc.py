@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from .db import gc_collect, gc_purge, gc_soft_delete
+from ..core.db import gc_collect, gc_purge, gc_soft_delete
 
 
 def run_gc(

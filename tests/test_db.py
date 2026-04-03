@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from remx.db import gc_purge, gc_soft_delete, retrieve
+from remx.core.db import gc_purge, gc_soft_delete, retrieve
 
 
 class TestGCSoftDeleteRowcount:

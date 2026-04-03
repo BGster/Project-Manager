@@ -3,7 +3,7 @@ import json
 import sys
 from pathlib import Path
 
-from .schema import MetaYaml
+from ..core.schema import MetaYaml
 
 
 def run_parse(meta_yaml_path: Path) -> int:

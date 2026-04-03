@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from .db import retrieve
+from ..core.db import retrieve
 
 
 def run_retrieve(
