@@ -1,156 +1,178 @@
 """remx index command — index a single file into memories + chunks + memories_vec."""
 import hashlib
-import json
 import sys
-from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
+
+from pydantic import BaseModel
 
 from ..core.chunker import chunk_paragraphs_simple, chunk_by_headings, count_tokens, _normalize_path, _is_global_path
 from ..core.db import expires_at_stale, expires_at_ttl, now_iso, write_memory
-from ..core.embedding import get_embedding, Embedder
-from ..core.schema import MetaYaml
+from ..core.embedding import get_embedding
+from ..core.schema import IndexScope, MetaYaml
 from ..core.storage import parse_front_matter
 
 
-def run_index(
+# ─── Config & Result Models ───────────────────────────────────────────────────
+
+class IndexConfig(BaseModel):
+    """Configuration for run_index chunking parameters."""
+    chunk_size_paras: int = 1
+    overlap_paras: int = 0
+    max_tokens: int = 512
+
+
+class IndexResult(BaseModel):
+    """Result of run_index."""
+    memory_id: str
+    chunk_count: int
+    expires_at: Optional[str]
+    file_path: Path
+
+
+# ─── FileContext ──────────────────────────────────────────────────────────────
+
+@dataclass
+class FileContext:
+    """Validated and parsed file context for indexing."""
+    file_path: Path
+    content: str                      # raw text (full file)
+    front_matter: dict                # parsed front-matter (empty dict if none)
+    body: str                          # text after front-matter delimiter
+    index_path: str                    # display path used in chunk_ids
+    scope: Optional[IndexScope]        # matched scope, or None
+    category: str
+    priority: Optional[str]
+    status: str
+    doc_type: Optional[str]
+    created_at: str                    # ISO timestamp
+    now: str                           # captured at resolution time
+
+
+# ─── Pure Functions ───────────────────────────────────────────────────────────
+
+def _resolve_file_context(
     file_path: Path,
     meta_yaml_path: Path,
-    db_path: Path,
-    embedder: Optional[Embedder] = None,
-    chunk_size_paras: int = 1,
-    overlap_paras: int = 0,
-    max_tokens: int = 512,
-) -> int:
-    """Index a single file into the database.
+    meta: MetaYaml,
+) -> FileContext:
+    """Resolve and validate a file against index_scope; parse front-matter.
 
-    Steps:
-    1. Load meta.yaml
-    2. Find matching index_scope
-    3. Parse front-matter → extract metadata
-    4. Split body into paragraphs, group into chunks
-    5. Compute expires_at from decay_groups
-    6. Write memory + chunks + vectors atomically
-
-    Args:
-        file_path: file to index
-        meta_yaml_path: path to meta.yaml
-        db_path: path to SQLite database
-        embedder: embedding provider (or None to skip vectors)
-        chunk_size_paras: paragraphs per chunk (overrides meta.yaml)
-        overlap_paras: paragraph overlap (overrides meta.yaml)
-        max_tokens: max tokens per chunk (overrides meta.yaml)
-
-    Returns:
-        0 on success, 1 on error
+    Returns FileContext on success.
+    Raises ValueError on failure (file not found, not in scope, parse error).
     """
-    # ── 0. Normalize and validate path ─────────────────────────────────────────
+    # Validate and normalize path
     try:
         resolved_path = _normalize_path(str(file_path))
     except ValueError as e:
-        print(f"remx index: {file_path}: {e}", file=sys.stderr)
-        return 1
+        raise ValueError(f"{file_path}: {e}")
 
     if not Path(resolved_path).exists():
-        print(f"remx index: {file_path}: file not found", file=sys.stderr)
-        return 1
+        raise ValueError(f"{file_path}: file not found")
 
-    if not meta_yaml_path.exists():
-        print(f"remx index: {meta_yaml_path}: meta.yaml not found", file=sys.stderr)
-        return 1
-
-    # ── 1. Load meta.yaml ──────────────────────────────────────────────────────
-    try:
-        meta = MetaYaml.load(meta_yaml_path)
-    except Exception as e:
-        print(f"remx index: {meta_yaml_path}: parse error — {e}", file=sys.stderr)
-        return 1
-
-    # ── 2. Find index_scope ────────────────────────────────────────────────────
+    # Find matching index_scope
     scope = meta.find_scope(file_path, meta_yaml_path.parent)
-    category = None
+    scope_category = None
     if scope:
-        category = meta.scope_category(scope)
+        scope_category = meta.scope_category(scope)
 
-    # ── 2b. Compute chunk_id path component ─────────────────────────────────────
-    # project memory: relative to scope path;  global memory: ~-prefixed display path
+    # Compute index_path (display path for chunk_ids)
     if scope:
         try:
             scope_resolved = (meta_yaml_path.parent / scope.path).resolve()
             index_path = str(file_path.resolve().relative_to(scope_resolved))
         except ValueError:
-            # file_path is not relative to scope.path — use as-is
             index_path = str(file_path)
     elif _is_global_path(str(file_path)):
-        # Global memory: display path with home replaced by ~
         home = str(Path.home())
         index_path = str(file_path).replace(home, "~")
     else:
-        # Relative path not under any scope — treat as project
         index_path = str(file_path)
 
-    # ── 3. Parse front-matter ──────────────────────────────────────────────────
+    # Parse front-matter
     text = file_path.read_text(encoding="utf-8")
     front_matter, body = parse_front_matter(text)
 
-    # Infer category from front-matter or scope
-    category = front_matter.get("category") or category or "unknown"
+    # Resolve category: front_matter > scope > "unknown"
+    category = front_matter.get("category") or scope_category or "unknown"
     priority = front_matter.get("priority")
     status = front_matter.get("status", "open")
     doc_type = front_matter.get("type")
 
-    # Validate dimension values
-    for dim_name, dim_val in [("category", category), ("priority", priority), ("status", status)]:
-        if dim_val and not meta.validate_value(dim_name, str(dim_val)):
-            print(f"remx index: {file_path}: warning: {dim_name}='{dim_val}' not in meta.yaml config; allowing anyway",
-                  file=sys.stderr)
+    now = now_iso()
+    created_at = front_matter.get("created_at") or now
 
-    # ── 4. Chunk content ───────────────────────────────────────────────────────
+    return FileContext(
+        file_path=file_path,
+        content=text,
+        front_matter=front_matter,
+        body=body,
+        index_path=index_path,
+        scope=scope,
+        category=category,
+        priority=priority,
+        status=status,
+        doc_type=doc_type,
+        created_at=created_at,
+        now=now,
+    )
+
+
+def _build_chunks(
+    body: str,
+    index_path: str,
+    meta: MetaYaml,
+    config: IndexConfig,
+) -> list:
+    """Split body text into chunks according to meta.yaml strategy.
+
+    Pure function — no I/O, no DB access.
+    """
     paragraphs = [p.strip() for p in body.split("\n\n") if p.strip()]
+    if not paragraphs:
+        return []
 
-    # Use meta.yaml overlap (by paragraph count)
-    ov = overlap_paras if overlap_paras >= 0 else meta.chunk.overlap
-
-    # Choose chunking strategy from meta.yaml
+    ov = config.overlap_paras if config.overlap_paras >= 0 else meta.chunk.overlap
     strategy = getattr(meta.chunk, "strategy", "heading")
 
     if strategy == "heading":
-        # Heading-level semantic chunking (default)
         hl = getattr(meta.chunk, "heading_levels", [1, 2, 3])
-        chunks = chunk_by_headings(
+        return chunk_by_headings(
             paragraphs,
             index_path,
-            max_tokens=max_tokens,
+            max_tokens=config.max_tokens,
             overlap_paras=ov,
             heading_levels=hl,
         )
     else:
-        # Paragraph-level fallback
-        cs = chunk_size_paras
+        cs = config.chunk_size_paras
         if cs <= 0:
-            # Pre-compute paragraph token counts once to avoid repeated tiktoken calls
             para_tokens_list = [count_tokens(p) for p in paragraphs]
             avg_para_tokens = max(1, sum(para_tokens_list) // max(1, len(paragraphs)))
             cs = max(1, meta.chunk.max_tokens // avg_para_tokens)
-        chunks = chunk_paragraphs_simple(paragraphs, index_path, chunk_size_paras=cs, overlap_paras=ov)
+        return chunk_paragraphs_simple(paragraphs, index_path, chunk_size_paras=cs, overlap_paras=ov)
 
-    if not chunks:
-        print(f"remx index: {file_path}: no content to index", file=sys.stderr)
-        return 1
 
-    # ── 5. Build memory record ─────────────────────────────────────────────────
-    # Idempotent: based on file_path to avoid duplicates on re-index
-    file_path_str = str(file_path)
+def _build_memory_and_chunks(
+    ctx: FileContext,
+    chunks: list,
+    meta: MetaYaml,
+    embedder: Optional[Any],
+) -> tuple[dict, list[dict]]:
+    """Build memory record dict and chunk dicts (with embeddings).
+
+    Returns (memory, chunk_dicts).
+    """
+    # Idempotent memory_id based on file_path
+    file_path_str = str(ctx.file_path)
     memory_id = hashlib.sha256(file_path_str.encode()).hexdigest()[:16].upper()
-    memory_id = f"{category[:3].upper()}-{memory_id}"
+    memory_id = f"{ctx.category[:3].upper()}-{memory_id}"
 
-    now = now_iso()
-    created_at = front_matter.get("created_at") or now
-    # For stale_after: expires_at is relative to updated_at (not creation time)
-    # We compute it here so expires_at_stale receives updated_at as reference
-    expires_at = _compute_expires_at(meta, category, status, updated_at=now)
+    # Compute expires_at (stale_after uses ctx.now as reference)
+    expires_at = _compute_expires_at(meta, ctx.category, ctx.status, updated_at=ctx.now)
 
-    # ── 6. Embed chunks ─────────────────────────────────────────────────────────
+    # Embed chunks
     chunk_dicts = [
         {
             "chunk_id": ch.chunk_id,
@@ -161,41 +183,23 @@ def run_index(
         for ch in chunks
     ]
 
-    # ── 7. Atomic write ───────────────────────────────────────────────────────
     memory = {
         "id": memory_id,
-        "category": category,
-        "priority": priority,
-        "status": status,
-        "type": doc_type,
+        "category": ctx.category,
+        "priority": ctx.priority,
+        "status": ctx.status,
+        "type": ctx.doc_type,
         "file_path": file_path_str,
         "chunk_count": len(chunks),
-        "created_at": front_matter.get("created_at") or now,
-        "updated_at": now,
+        "created_at": ctx.created_at,
+        "updated_at": ctx.now,
         "expires_at": expires_at,
     }
 
-    # ── 9. Atomic write ────────────────────────────────────────────────────────
-    try:
-        write_memory(
-            db_path=db_path,
-            memory=memory,
-            chunks=chunk_dicts,
-            vector_dimensions=meta.vector.dimensions,
-        )
-    except Exception as e:
-        print(f"remx index: {file_path}: write error — {e}", file=sys.stderr)
-        return 1
+    return memory, chunk_dicts
 
-    print(f"remx index: indexed {file_path}")
-    print(f"  memory_id: {memory_id}")
-    print(f"  category: {category}")
-    print(f"  chunks: {len(chunks)}")
-    if expires_at:
-        print(f"  expires_at: {expires_at}")
 
-    return 0
-
+# ─── Compute Expires At ───────────────────────────────────────────────────────
 
 def _compute_expires_at(
     meta: MetaYaml,
@@ -223,3 +227,82 @@ def _compute_expires_at(
         return expires_at_stale(days, updated_at)
     else:
         return None
+
+
+# ─── Main Command ─────────────────────────────────────────────────────────────
+
+def run_index(
+    file_path: Path,
+    meta_yaml_path: Path,
+    db_path: Path,
+    config: IndexConfig = IndexConfig(),
+    embedder: Optional[Any] = None,
+) -> IndexResult:
+    """Index a single file into the database.
+
+    Orchestrator steps:
+    1. Load meta.yaml
+    2. Resolve file context (path + scope + front-matter)
+    3. Chunk content (pure)
+    4. Build memory + chunk records (with embedding)
+    5. Atomic write to DB
+
+    Args:
+        file_path: file to index
+        meta_yaml_path: path to meta.yaml
+        db_path: path to SQLite database
+        config: IndexConfig with chunking parameters
+        embedder: embedding provider (or None to skip vectors)
+
+    Returns:
+        IndexResult on success
+
+    Raises:
+        ValueError on file/scope errors
+    """
+    if not meta_yaml_path.exists():
+        raise ValueError(f"{meta_yaml_path}: meta.yaml not found")
+
+    meta = MetaYaml.load(meta_yaml_path)
+
+    # Step 2: Resolve file context
+    ctx = _resolve_file_context(file_path, meta_yaml_path, meta)
+
+    # Validate dimension values (warn but allow)
+    for dim_name, dim_val in [("category", ctx.category), ("priority", ctx.priority), ("status", ctx.status)]:
+        if dim_val and not meta.validate_value(dim_name, str(dim_val)):
+            print(f"remx index: {file_path}: warning: {dim_name}='{dim_val}' not in meta.yaml config; allowing anyway",
+                  file=sys.stderr)
+
+    # Step 3: Chunk content
+    chunks = _build_chunks(ctx.body, ctx.index_path, meta, config)
+    if not chunks:
+        raise ValueError(f"{file_path}: no content to index")
+
+    # Step 4: Build records
+    memory, chunk_dicts = _build_memory_and_chunks(ctx, chunks, meta, embedder)
+
+    # Step 5: Atomic write
+    try:
+        write_memory(
+            db_path=db_path,
+            memory=memory,
+            chunks=chunk_dicts,
+            vector_dimensions=meta.vector.dimensions,
+        )
+    except Exception as e:
+        raise ValueError(f"{file_path}: write error — {e}")
+
+    print(f"remx index: indexed {file_path}")
+    print(f"  memory_id: {memory['id']}")
+    print(f"  category: {memory['category']}")
+    print(f"  chunks: {memory['chunk_count']}")
+    if memory.get("expires_at"):
+        print(f"  expires_at: {memory['expires_at']}")
+
+    return IndexResult(
+        memory_id=memory["id"],
+        chunk_count=memory["chunk_count"],
+        expires_at=memory.get("expires_at"),
+        file_path=file_path,
+    )

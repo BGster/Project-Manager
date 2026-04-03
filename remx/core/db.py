@@ -9,6 +9,8 @@ from typing import Any, Optional
 
 import sqlite3
 
+from .records import GCReport
+
 try:
     import sqlite_vec
     VEC_AVAILABLE = True
@@ -18,11 +20,13 @@ except ImportError:
 
 # ─── Connection helper ─────────────────────────────────────────────────────────
 
-def get_db(db_path: Path) -> sqlite3.Connection:
+def get_db(db_path: Path, vec_available: Optional[bool] = None) -> sqlite3.Connection:
     """Get database connection with vec extension loaded, WAL mode, FK enforcement."""
+    if vec_available is None:
+        vec_available = VEC_AVAILABLE
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
-    if VEC_AVAILABLE:
+    if vec_available:
         conn.enable_load_extension(True)
         try:
             sqlite_vec.load(conn)
@@ -267,10 +271,10 @@ def _scope_clause(scope_path: Optional[Path]) -> tuple[str, list[Any]]:
 def gc_collect(
     db_path: Path,
     scope_path: Optional[Path] = None,
-) -> dict[str, Any]:
+) -> GCReport:
     """Query deprecated/expired records for GC report.
 
-    Returns a dict with:
+    Returns a GCReport with:
       - expired_memories: list of memory records past expires_at
       - deprecated_memories: list of already-soft-deleted records
       - total_chunks: count of associated chunks
@@ -310,11 +314,11 @@ def gc_collect(
             "(SELECT id FROM memories WHERE deprecated = 1)"
         ).fetchone()[0]
 
-        return {
-            "expired_memories": [dict(r) for r in expired_rows],
-            "deprecated_memories": [dict(r) for r in deprecated_rows],
-            "total_chunks": chunk_count,
-        }
+        return GCReport(
+            expired_memories=[dict(r) for r in expired_rows],
+            deprecated_memories=[dict(r) for r in deprecated_rows],
+            total_chunks=chunk_count,
+        )
     finally:
         conn.close()
 
