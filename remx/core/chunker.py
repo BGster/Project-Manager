@@ -64,6 +64,14 @@ class Chunk:
     heading_text: str = ""    # heading content (empty if no heading)
 
 
+@dataclass
+class Section:
+    """A heading-bounded section of a document."""
+    level: int           # 0 = unstated/root (content before any heading)
+    title: str           # heading text (empty string for level 0)
+    body_lines: list[str]  # paragraph strings belonging to this section
+
+
 # Markdown heading pattern: lines starting with 1-6 # characters
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
 # Code fence pattern
@@ -71,8 +79,32 @@ _CODE_FENCE_RE = re.compile(r"^```", re.MULTILINE)
 # Sentence-ending characters for fallback sentence splitting
 _SENTENCE_END_RE = re.compile(r"[。？！；\n]")
 
-# ─── tiktoken encoder cache (avoid repeated get_encoding calls) ───────────────
-_ENCODER_CACHE: dict[str, tiktoken.Encoding] = {}
+
+class TokenCounter:
+    """Thread-safe tiktoken encoder cache for token counting.
+
+    Avoids repeated get_encoding calls by caching encoders per model.
+    """
+
+    def __init__(self) -> None:
+        self._cache: dict[str, tiktoken.Encoding | None] = {}
+
+    def count(self, text: str, model: str = "cl100k_base") -> int:
+        """Count tokens using tiktoken (GPT-4 / cl100k_base encoding)."""
+        if model not in self._cache:
+            try:
+                self._cache[model] = tiktoken.get_encoding(model)
+            except Exception:
+                # Fallback: naive word count * 1.3 as rough token estimate
+                self._cache[model] = None
+        enc = self._cache.get(model)
+        if enc is not None:
+            return len(enc.encode(text))
+        return int(len(text.split()) * 1.3)
+
+
+# Global instance for use throughout the module
+_token_counter = TokenCounter()
 
 
 def count_tokens(text: str, model: str = "cl100k_base") -> int:
@@ -81,16 +113,7 @@ def count_tokens(text: str, model: str = "cl100k_base") -> int:
     The encoder is cached after the first call per model to avoid
     O(n) re-initialisation overhead inside tight loops.
     """
-    if model not in _ENCODER_CACHE:
-        try:
-            _ENCODER_CACHE[model] = tiktoken.get_encoding(model)
-        except Exception:
-            # Fallback: naive word count * 1.3 as rough token estimate
-            _ENCODER_CACHE[model] = None
-    enc = _ENCODER_CACHE.get(model)
-    if enc is not None:
-        return len(enc.encode(text))
-    return int(len(text.split()) * 1.3)
+    return _token_counter.count(text, model)
 
 
 def split_paragraphs(text: str) -> list[str]:
@@ -248,6 +271,149 @@ def _make_chunks(
 
 # ─── Heading-level chunking ────────────────────────────────────────────────
 
+def _group_by_headings(
+    paragraphs: list[str],
+    heading_levels: list[int],
+) -> list[Section]:
+    """Group flat paragraph list into Section blocks by heading boundaries.
+
+    Pure function — no side effects, no closures.
+
+    Args:
+        paragraphs: flat list of paragraph strings
+        heading_levels: which heading levels (e.g. [1,2,3]) to treat as boundaries
+
+    Returns:
+        list of Section objects. Sections with empty body_lines are NOT included.
+    """
+    sections: list[Section] = []
+    current = Section(level=0, title="", body_lines=[])
+
+    for para in paragraphs:
+        heading_match = _HEADING_RE.match(para.strip())
+        if heading_match:
+            lvl = len(heading_match.group(1))
+            heading_txt = heading_match.group(2).strip()
+            if lvl in heading_levels:
+                # Save previous section if it has content
+                if current.body_lines:
+                    sections.append(current)
+                # Start new section
+                current = Section(level=lvl, title=heading_txt, body_lines=[])
+            else:
+                # Heading level not in scope — treat as body paragraph
+                current.body_lines.append(para)
+        else:
+            current.body_lines.append(para)
+
+    # Don't forget last section
+    if current.body_lines:
+        sections.append(current)
+
+    return sections
+
+
+def _sections_to_chunks(
+    sections: list[Section],
+    file_path: str,
+    max_tokens: int,
+    overlap_paras: int,
+) -> list[Chunk]:
+    """Convert sections into chunks with overlap handling.
+
+    Pure function — no nonlocal, state threaded through loop explicitly.
+
+    Args:
+        sections: list of Section from _group_by_headings
+        file_path: display path for chunk_ids
+        max_tokens: soft limit per chunk
+        overlap_paras: number of trailing paragraphs to carry into next chunk
+    """
+    chunks: list[Chunk] = []
+    chunk_index = 0
+    overlap_buffer: list[str] = []
+    overlap_tokens: int = 0
+    overlap_heading_level: int = 0
+    overlap_heading_text: str = ""
+
+    for sec in sections:
+        heading_block = (f"{'#' * sec.level} {sec.title}" + "\n\n") if sec.title else ""
+        sec_text = "\n\n".join(sec.body_lines) if sec.body_lines else ""
+        sec_content = heading_block + sec_text
+        sec_tokens = count_tokens(sec_content)
+
+        if sec_tokens > max_tokens:
+            # Section too big — flush overlap, split by sentences
+            if overlap_buffer:
+                chunks.append(_make_chunk_object(
+                    overlap_buffer, file_path, chunk_index,
+                    overlap_tokens, overlap_heading_level, overlap_heading_text,
+                ))
+                chunk_index += 1
+                overlap_buffer = []
+                overlap_tokens = 0
+            sub_chunks = _split_by_sentences(
+                sec_text, file_path, max_tokens, sec.level, sec.title,
+            )
+            for sc in sub_chunks:
+                chunks.append(sc)
+                chunk_index += 1
+            continue
+
+        # Prepend overlap buffer to this section
+        chunk_paras = overlap_buffer + [sec_content]
+        chunk_tokens = overlap_tokens + sec_tokens
+
+        if chunk_tokens > max_tokens and overlap_buffer:
+            # Overlap too big — emit it separately
+            chunks.append(_make_chunk_object(
+                overlap_buffer, file_path, chunk_index,
+                overlap_tokens, overlap_heading_level, overlap_heading_text,
+            ))
+            chunk_index += 1
+            chunk_paras = [sec_content]
+            chunk_tokens = sec_tokens
+
+        # Emit this section as a chunk
+        chunks.append(_make_chunk_object(
+            chunk_paras, file_path, chunk_index, chunk_tokens, sec.level, sec.title,
+        ))
+        chunk_index += 1
+
+        # Update overlap buffer
+        if overlap_paras > 0 and sec.body_lines:
+            keep_paras = sec.body_lines[-overlap_paras:]
+            keep_content = "\n\n".join(keep_paras)
+            overlap_buffer = [keep_content]
+            overlap_tokens = count_tokens(keep_content)
+            overlap_heading_level = sec.level
+            overlap_heading_text = sec.title
+        else:
+            overlap_buffer = []
+            overlap_tokens = 0
+
+    return chunks
+
+
+def _make_chunk_object(
+    chunk_paras: list[str],
+    file_path: str,
+    chunk_index: int,
+    token_count: int,
+    heading_level: int,
+    heading_text: str,
+) -> Chunk:
+    """Helper to construct a Chunk from paragraph list (pure, no side effects)."""
+    return Chunk(
+        chunk_id=make_chunk_id(file_path, chunk_index),
+        content="\n\n".join(chunk_paras),
+        para_indices=[],
+        token_count=token_count,
+        heading_level=heading_level,
+        heading_text=heading_text,
+    )
+
+
 def chunk_by_headings(
     paragraphs: list[str],
     file_path: str,
@@ -258,10 +424,9 @@ def chunk_by_headings(
     """Split markdown content by H1/H2/H3 headings as semantic units.
 
     Algorithm:
-    1. Scan paragraphs, identify heading lines (matching heading_levels)
-    2. Each heading + subsequent content = one semantic unit
-    3. If unit token count > max_tokens, split within by sentences
-    4. Units are emitted as chunks, respecting overlap via overlap_paras
+    1. Group paragraphs into sections by heading boundaries
+    2. If no headings found, fall back to paragraph chunking
+    3. Convert sections to chunks with overlap handling
     """
     if heading_levels is None:
         heading_levels = [1, 2, 3]
@@ -269,115 +434,11 @@ def chunk_by_headings(
     if not paragraphs:
         return []
 
-    chunks: list[Chunk] = []
-    chunk_index = 0
-
-    # ── Step 1: Group paragraphs into semantic sections ──────────────────
-    sections: list[dict] = []  # list of {heading_level, heading_text, paras: []}
-    current: dict = {"heading_level": 0, "heading_text": "", "paras": []}
-
-    for para_idx, para in enumerate(paragraphs):
-        # Detect heading
-        heading_match = _HEADING_RE.match(para.strip())
-        if heading_match:
-            lvl = len(heading_match.group(1))
-            heading_txt = heading_match.group(2).strip()
-            if lvl in heading_levels:
-                # Save previous section only if it has content
-                if current["paras"]:
-                    sections.append(current)
-                # Start new section
-                current = {
-                    "heading_level": lvl,
-                    "heading_text": heading_txt,
-                    "paras": [],
-                }
-            else:
-                # Heading level not in scope — treat as normal paragraph
-                current["paras"].append(para)
-        else:
-            current["paras"].append(para)
-
-    # Don't forget last section
-    if current["paras"]:
-        sections.append(current)
-
-    # ── Step 2: If no sections (no headings found), fall back to paragraph ──
+    sections = _group_by_headings(paragraphs, heading_levels)
     if not sections:
         return _make_chunks(paragraphs, file_path, max_tokens, overlap_paras)
 
-    # ── Step 3: Emit chunks — each heading section = one chunk ─────────────
-    # Overlap: for heading strategy, overlap means the last N section content blocks
-    # are prepended to the NEXT chunk (preserving heading context from previous chunk)
-    _chunk_index = 0
-    overlap_buffer: list[str] = []   # content blocks kept for next chunk's start
-    overlap_tokens: int = 0
-    overlap_heading_level: int = 0
-    overlap_heading_text: str = ""
-
-    def _emit(chunk_paras: list, tokens: int, lvl: int, htxt: str) -> None:
-        nonlocal _chunk_index
-        chunk_text = "\n\n".join(chunk_paras)
-        chunks.append(Chunk(
-            chunk_id=make_chunk_id(file_path, _chunk_index),
-            content=chunk_text,
-            para_indices=[],
-            token_count=tokens,
-            heading_level=lvl,
-            heading_text=htxt,
-        ))
-        _chunk_index += 1
-
-    for sec in sections:
-        heading = sec["heading_text"]
-        heading_lvl = sec["heading_level"]
-        sec_paras = sec["paras"]
-        heading_block = (f"{'#' * heading_lvl} {heading}" + "\n\n") if heading else ""
-        sec_text = "\n\n".join(sec_paras) if sec_paras else ""
-        sec_content = heading_block + sec_text
-        sec_tokens = count_tokens(sec_content)
-
-        if sec_tokens > max_tokens:
-            # Section itself too big — flush overlap buffer, split by sentences
-            if overlap_buffer:
-                _emit(overlap_buffer, overlap_tokens, overlap_heading_level, overlap_heading_text)
-                overlap_buffer = []
-                overlap_tokens = 0
-            sub_chunks = _split_by_sentences(sec_text, file_path, max_tokens, heading_lvl, heading)
-            for sc in sub_chunks:
-                chunks.append(sc)
-                _chunk_index += 1
-            continue
-
-        # Each section = one chunk; prepend overlap from previous chunk
-        chunk_paras = overlap_buffer + [sec_content]
-        chunk_tokens = overlap_tokens + sec_tokens
-
-        if chunk_tokens > max_tokens and overlap_buffer:
-            # Overlap too big to fit with this section — emit overlap as its own chunk
-            _emit(overlap_buffer, overlap_tokens, overlap_heading_level, overlap_heading_text)
-            chunk_paras = [sec_content]
-            chunk_tokens = sec_tokens
-
-        # Emit this section as a chunk
-        _emit(chunk_paras, chunk_tokens, heading_lvl, heading)
-
-        # Update overlap buffer with last `overlap_paras` paragraphs from this section
-        # (so next chunk's start has context)
-        if overlap_paras > 0 and len(sec_paras) > 0:
-            # Keep last N paragraphs from this section as overlap
-            keep_paras = sec_paras[-overlap_paras:]
-            keep_content = "\n\n".join(keep_paras)
-            keep_tokens = count_tokens(keep_content)
-            overlap_buffer = [keep_content]
-            overlap_tokens = keep_tokens
-            overlap_heading_level = heading_lvl
-            overlap_heading_text = heading
-        else:
-            overlap_buffer = []
-            overlap_tokens = 0
-
-    return chunks
+    return _sections_to_chunks(sections, file_path, max_tokens, overlap_paras)
 
 
 def _split_by_sentences(

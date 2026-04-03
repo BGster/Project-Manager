@@ -1,11 +1,12 @@
 """RemX v2 CLI — Engine Layer (Phase 1).
 
-Implements 5 commands:
+Implements 6 commands:
   remx parse < meta.yaml
   remx init [--reset] [--db <path>] [--meta <path>]
   remx index <path> [--db <path>] [--meta <path>]
   remx gc [--scope <path>] [--dry-run] [--purge] [--db <path>]
   remx retrieve [--filter <json>] [--query <text>] [--db <path>] [--limit <n>]
+  remx stats [--db <path>] [--meta <path>]
 
 Usage as library:
   from remx.commands.parse import run_parse
@@ -13,7 +14,9 @@ Usage as library:
   from remx.commands.index import run_index
   from remx.commands.gc import run_gc
   from remx.commands.retrieve import run_retrieve
+  from remx.commands.stats import run_stats
 """
+import contextvars
 import json
 import sys
 from pathlib import Path
@@ -25,25 +28,32 @@ from . import __version__
 from .core.embedding import create_embedder
 from .core.schema import MetaYaml
 from .commands.gc import run_gc as gc_run
-from .commands.index import run_index as index_run
+from .commands.index import run_index as index_run, IndexConfig
 from .commands.init import run_init as init_run
 from .commands.parse import run_parse as parse_run
 from .commands.retrieve import run_retrieve as retrieve_run
+from .commands.stats import run_stats as stats_run
 
 app = typer.Typer(name="remx", no_args_is_help=True, invoke_without_command=False)
 console = typer.echo
 
-# Cached stdin content (set by __main__.py before typer runs)
-_STDIN_CACHE: Optional[str] = None
+# Cached stdin content (set by __main__.py before typer runs) — use contextvar for thread safety
+_stdin_cache_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "_stdin_cache_var", default=None
+)
+
+
+def _set_stdin_cache(content: str) -> None:
+    """Set the stdin cache (called by __main__.py before typer runs)."""
+    _stdin_cache_var.set(content)
 
 
 def _get_stdin_content() -> str:
     """Get cached stdin content or fall back to reading directly."""
-    global _STDIN_CACHE
-    if _STDIN_CACHE is not None:
-        content = _STDIN_CACHE
+    content = _stdin_cache_var.get()
+    if content is not None:
         # Clear cache after use to prevent re-use in subsequent commands
-        _STDIN_CACHE = None
+        _stdin_cache_var.set(None)
         return content
     if not sys.stdin.isatty():
         return sys.stdin.read()
@@ -132,16 +142,19 @@ def index_cmd(
     cs = chunk_size if chunk_size > 0 else 1
     ov = overlap if overlap >= 0 else meta_cfg.chunk.overlap
 
-    rc = index_run(
-        file_path=path,
-        meta_yaml_path=meta,
-        db_path=db,
-        embedder=embedder,
-        chunk_size_paras=cs,
-        overlap_paras=ov,
-        max_tokens=max_tokens,
-    )
-    raise typer.Exit(code=rc)
+    config = IndexConfig(chunk_size_paras=cs, overlap_paras=ov, max_tokens=max_tokens)
+
+    try:
+        index_run(
+            file_path=path,
+            meta_yaml_path=meta,
+            db_path=db,
+            config=config,
+            embedder=embedder,
+        )
+    except Exception:
+        raise typer.Exit(code=1)
+    raise typer.Exit(code=0)
 
 
 @app.command("gc")
@@ -212,6 +225,16 @@ def retrieve_cmd(
         embedder=embedder,
         decay_weight=decay_weight,
     )
+    raise typer.Exit(code=rc)
+
+
+@app.command("stats")
+def stats_cmd(
+    db: Path = typer.Option(Path("memory.db"), "--db", help="Database path"),
+    meta: Path = typer.Option(Path("meta.yaml"), "--meta", help="meta.yaml path"),
+):
+    """Show database statistics and health info."""
+    rc = stats_run(db, meta)
     raise typer.Exit(code=rc)
 
 

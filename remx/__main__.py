@@ -3,14 +3,14 @@ import sys
 
 # Cache stdin BEFORE typer processes anything
 # This prevents stdin from being consumed by shell commands like `source`
-_STDIN_CACHE: Optional[str] = None
+_stdin_content: str | None = None
 if not sys.stdin.isatty():
-    _STDIN_CACHE = sys.stdin.read()
+    _stdin_content = sys.stdin.read()
 
-from .cli import app
+from .cli import app, _set_stdin_cache
 
 # Make cached stdin available to CLI module
-import remx.cli as cli_module
-cli_module._STDIN_CACHE = _STDIN_CACHE
+if _stdin_content is not None:
+    _set_stdin_cache(_stdin_content)
 
 app()

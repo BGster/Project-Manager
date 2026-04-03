@@ -53,6 +53,15 @@ class DecayGroup(BaseModel):
     apply_fields: list[str] = Field(default_factory=list)  # e.g. ["created_at", "expires_at"]
 
 
+# Built-in default decay rules (used when meta.yaml has no explicit decay_group)
+DEFAULT_DECAY_GROUPS: list[DecayGroup] = [
+    DecayGroup(name="tmp_default", trigger={"category": "tmp"}, function="ttl", params={"ttl_hours": 24}),
+    DecayGroup(name="demand_default", trigger={"category": "demand"}, function="stale_after", params={"days": 90}),
+    DecayGroup(name="issue_default", trigger={"category": "issue"}, function="stale_after", params={"days": 60}),
+    # knowledge and principle default to never (no decay)
+]
+
+
 # ─── Index Scope ──────────────────────────────────────────────────────────────
 
 class IndexScope(BaseModel):
@@ -145,7 +154,11 @@ class MetaYaml(BaseModel):
         return None
 
     def decay_group_for(self, category: str, status: Optional[str] = None) -> Optional[DecayGroup]:
-        """Find the first decay_group whose trigger matches category (+ optional status)."""
+        """Find the first decay_group whose trigger matches category (+ optional status).
+
+        Falls back to DEFAULT_DECAY_GROUPS if no explicit decay_group matches.
+        """
+        # First: explicit decay_groups in meta.yaml
         for dg in self.decay_groups:
             trigger = dg.trigger
             cat_match = trigger.get("category") == category
@@ -155,6 +168,11 @@ class MetaYaml(BaseModel):
                 if status is None or trigger.get("status") != status:
                     continue
             return dg
+        # Fall back: built-in defaults (only for categories with no explicit config)
+        for dg in DEFAULT_DECAY_GROUPS:
+            trigger = dg.trigger
+            if trigger.get("category") == category:
+                return dg
         return None
 
     def validate_value(self, dim_name: str, value: str, is_decay: bool = False) -> bool:
