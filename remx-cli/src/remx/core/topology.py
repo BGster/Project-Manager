@@ -35,53 +35,6 @@ REL_ROLES = {
 DEFAULT_CONTEXT = "global"  # 无条件全局可用
 
 
-# ─── Schema ─────────────────────────────────────────────────────────────────
-
-TOPOLOGY_TABLES = """
-CREATE TABLE IF NOT EXISTS memory_nodes (
-    id          TEXT PRIMARY KEY,
-    category    TEXT NOT NULL,
-    chunk       TEXT NOT NULL,
-    created_at INTEGER DEFAULT (unixepoch('now', 'subsec'))
-);
-
-CREATE TABLE IF NOT EXISTS memory_relations (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    rel_type    TEXT NOT NULL CHECK (rel_type IN (
-        '因果关系', '相关性', '对立性', '流程顺序性', '组成性', '依赖性'
-    )),
-    context     TEXT DEFAULT NULL,
-    description TEXT,
-    created_at  INTEGER DEFAULT (unixepoch('now', 'subsec'))
-);
-
-CREATE TABLE IF NOT EXISTS memory_relation_participants (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    relation_id INTEGER NOT NULL REFERENCES memory_relations(id) ON DELETE CASCADE,
-    node_id     TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE,
-    role        TEXT NOT NULL,
-    UNIQUE(relation_id, node_id, role)
-);
-
-CREATE INDEX IF NOT EXISTS idx_participants_node ON memory_relation_participants(node_id);
-CREATE INDEX IF NOT EXISTS idx_participants_rel ON memory_relation_participants(relation_id);
-CREATE INDEX IF NOT EXISTS idx_relations_context ON memory_relations(context);
-"""
-
-
-def init_topology_db(db_path: Path) -> None:
-    """Create topology tables if not exist."""
-    conn = get_db(db_path)
-    try:
-        for stmt in TOPOLOGY_TABLES.strip().split(";"):
-            stmt = stmt.strip()
-            if stmt:
-                conn.execute(stmt)
-        conn.commit()
-    finally:
-        conn.close()
-
-
 # ─── Node CRUD ────────────────────────────────────────────────────────────────
 
 def ensure_node(db_path: Path, node_id: str, category: str, chunk: str) -> None:
