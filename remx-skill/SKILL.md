@@ -72,6 +72,7 @@ RemX 通过拓扑关系将相关记忆连接成图，实现上下文感知的图
 | **memory_relation** | 关系记录，含 rel_type/context/description |
 | **memory_relation_participants** | 参与者的角色（cause/effect/component/whole/related/opponent）|
 | **context** | 上下文标签，NULL=全局无条件匹配 |
+| **topology_aware_recall** | 拓扑增强检索：语义结果经 BFS 图扩展，发现语义未命中但结构相关的信息 |
 
 ### 支持的关系类型
 
@@ -84,17 +85,6 @@ RemX 通过拓扑关系将相关记忆连接成图，实现上下文感知的图
 | `组成性` | A 是 B 的组件 / B 是 A 的整体 |
 | `依赖性` | A 依赖 B |
 
-### 拓扑增强的语义检索
-
-`remx retrieve --query` 可通过 `remx relate expand` 扩展结果：
-
-```bash
-# 先语义搜索
-remx retrieve --query "认证模块" --db ./memory.db --meta ./meta.yaml > base_results.json
-# 再拓扑扩展（从语义结果出发，按拓扑关系 BFS 扩展最多 10 条）
-cat base_results.json | remx relate expand --db ./memory.db --current-context main_session
-```
-
 ### Context 过滤机制
 
 relation 的 context 决定何时可用：
@@ -104,11 +94,67 @@ relation 的 context 决定何时可用：
 
 检索时传入 `--current-context` 参数按上下文过滤。
 
+### 拓扑增强的语义检索（topology_aware_recall）
+
+语义搜索找到的是字面相关记忆；拓扑扩展在此基础上，通过关系图发现语义未命中但结构相关的信息。
+
+**算法流程：**
+1. 语义搜索返回一批命中结果（每条含 `id` 或 `memory_id`）
+2. 对每个命中节点执行 BFS 图遍历（默认 2 跳），收集可达节点
+3. 去重后最多返回 10 条拓扑扩展结果（均标记 `source: "topology"`）
+
+**使用方式：**
+```bash
+# 语义搜索 → 拓扑扩展管道
+remx retrieve --query "认证模块" --db ./memory.db --meta ./meta.yaml > base.json
+cat base.json | remx relate expand --db ./memory.db --current-context main_session
+```
+
+**扩展参数：**
+- `--max-depth`：BFS 最大深度（默认 2，值越大范围越广但噪声越多）
+- `--max-additional`：最多扩展多少条拓扑结果（默认 10）
+
+**返回格式差异：**
+- 语义命中：`{id, category, chunk, score}`
+- 拓扑扩展：`{id, category, chunk, source: "topology", depth: N}`
+
 ### 使用场景
 
 - **因果链追溯**：`remx relate graph --node-id <A> --max-depth 3` 追溯 A 导致 B 导致 C
 - **跨记忆关联**：两条原本独立的需求有共同的底层依赖，拓扑连接后一次检索全部召回
 - **上下文隔离**：group_chat 中的关系不对 main_session 暴露
+- **语义盲区补充**：某记忆在向量空间中与查询距离远，但通过拓扑图直接相连，扩展检索可命中
+
+## 拓扑模块 Python API
+
+`remx.core.topology` 导出以下公共函数，可直接调用：
+
+| 函数 | 说明 |
+|------|------|
+| `ensure_node(db_path, node_id, category, chunk)` | 插入或忽略一个节点（幂等） |
+| `list_nodes(db_path, category=None)` | 列出节点，可按 category 过滤 |
+| `insert_relation(db_path, rel_type, node_ids, roles, context=None, description=None)` | 原子插入关系 + 参与者 |
+| `delete_relation(db_path, relation_id)` | 删除关系（级联删除参与者） |
+| `query_relations(db_path, node_id, current_context=None)` | 查询某节点所有关系（含上下文过滤） |
+| `get_related_nodes(db_path, node_id, current_context=None, max_depth=2)` | BFS 图遍历，返回可达节点图 |
+| `topology_aware_recall(db_path, base_results, current_context=None, max_depth=2, max_additional=10)` | 语义结果 + 拓扑扩展合并 |
+
+**使用示例：**
+```python
+from pathlib import Path
+from remx.core.topology import insert_relation, topology_aware_recall
+
+db = Path("memory.db")
+
+# 建立因果链
+insert_relation(db, "因果关系", ["DEM-001", "DEM-002"], ["cause", "effect"])
+insert_relation(db, "因果关系", ["DEM-002", "DEM-003"], ["cause", "effect"])
+
+# 程序化拓扑扩展检索
+base = [{"id": "DEM-001", "chunk": "...", "category": "demand"}]
+expanded = topology_aware_recall(db, base, current_context="main_session", max_depth=2)
+# expanded 包含语义命中 + 拓扑扩展节点，拓扑节点标记 source="topology"
+```
 
 ## 记忆书写规范
 
@@ -179,6 +225,7 @@ remx stats --db ./memory.db --meta ./meta.yaml
 | 需要回顾项目上下文 | `ContextAssembler` 检索相关记忆 |
 | 每次索引新文件后 | `DecayWatcher` 检查衰减阈值，提醒清理 |
 | 发现两条记忆有关联 | `remx relate insert` 建立拓扑关系 |
+| 需要程序化操作拓扑 | 直接调用 `remx.core.topology` Python API |
 
 ## 配置
 

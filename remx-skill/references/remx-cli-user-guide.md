@@ -268,18 +268,32 @@ remx relate nodes --db ./memory.db --limit 100
 
 ### remx relate expand
 
-从语义搜索结果出发，通过拓扑扩展更多相关记忆。
+从语义搜索结果出发，通过拓扑图遍历扩展更多相关记忆。
+
+**输入：** 从 stdin 读取语义搜索的 JSON 结果（数组，每项需含 `id` 或 `memory_id` 字段）
+**算法：** 对每个语义命中节点执行 BFS 图遍历（最多 `max_depth` 跳），将沿途节点加入结果集
 
 ```bash
 cat semantic_results.json | remx relate expand --db <path> \
     [--current-context <ctx>] [--max-depth <n>] [--max-additional <n>]
 ```
 
+| 参数 | 说明 |
+|------|------|
+| `--current-context <ctx>` | 当前会话上下文，用于过滤 relation |
+| `--max-depth <n>` | BFS 最大深度（默认 2） |
+| `--max-additional <n>` | 最多从拓扑扩展多少条记录（默认 10） |
+
+**返回：** JSON 数组，每条拓扑扩展记录含 `source: "topology"` 和 `depth`（距离语义命中节点的跳数）标记来源
+
 **示例：**
 ```bash
 # 语义搜索结果拓扑扩展
 remx retrieve --query "认证模块" --db ./memory.db --meta ./meta.yaml > base.json
 cat base.json | remx relate expand --db ./memory.db --current-context main_session --max-additional 10
+
+# 深度扩展（扩大搜索范围）
+cat base.json | remx relate expand --db ./memory.db --max-depth 3 --max-additional 20
 ```
 
 ---
