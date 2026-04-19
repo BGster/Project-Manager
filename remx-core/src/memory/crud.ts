@@ -15,7 +15,7 @@ import Database from "better-sqlite3";
 import { accessSync } from "fs";
 
 import { getDb, DEFAULT_DB } from "../shared/db";
-import { ensureNode } from "./topology";
+import { ensureNode } from "./graph";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

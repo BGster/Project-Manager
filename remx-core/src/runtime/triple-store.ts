@@ -11,7 +11,7 @@ import { join } from "path";
 import Database from "better-sqlite3";
 
 import { getDb, DEFAULT_DB } from "../shared/db";
-import { insertRelation, deleteRelation, queryRelations, listNodes, ensureNode, type RelType, type RelRole, type MemoryNode } from "../memory/topology";
+import { insertRelation, deleteRelation, queryRelations, listNodes, ensureNode, type RelType, type RelRole, type MemoryNode } from "../memory/graph";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 

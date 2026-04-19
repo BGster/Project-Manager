@@ -2,11 +2,10 @@
  * remx-core — RemX v0.3.0 unified memory system (TypeScript)
  *
  * Exports:
- *   memory/  — topology, recall, crud
- *   runtime/ — triple-store
+ *   memory/  — graph, recall, memory
  */
 
-// Memory layer — topology (rename internal getDb to avoid collision)
+// Memory layer — graph (topology.ts renamed)
 export {
   REL_TYPES_ARRAY,
   REL_ROLES_ARRAY,
@@ -30,7 +29,7 @@ export {
   getRelatedNodes,
   matchContext,
   topologyAwareRecall,
-} from "./memory/topology";
+} from "./memory/graph";
 
 // memory/recall
 export {

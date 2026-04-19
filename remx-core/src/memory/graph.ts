@@ -1,6 +1,6 @@
 /**
- * topology.ts
- * Topology relations for RemX — context-aware graph recall.
+ * graph.ts
+ * Graph relations for RemX — context-aware graph recall.
  *
  * Ported from topology.py (Python) → TypeScript.
  * Represents nodes (memory chunks) and typed relations between them.

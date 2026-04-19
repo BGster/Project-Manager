@@ -4,7 +4,7 @@
  *
  * Implements:
  * - Semantic recall (via vector similarity — stubbed, requires embedding provider)
- * - Topology-aware expansion (via topology.ts)
+ * - Topology-aware expansion (via graph.ts)
  * - Relevance scoring (hybrid: vector + decay + freshness)
  */
 
@@ -19,7 +19,7 @@ import {
   matchContext,
   DEFAULT_CONTEXT,
   type BaseResult,
-} from "./topology";
+} from "./graph";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
