@@ -4,13 +4,19 @@
   "description": "RemX unified memory system — TypeScript core runtime",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "remx": "./dist/cli.js"
+  },
   "scripts": {
     "build": "tsc",
     "test": "vitest",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "better-sqlite3": "^11.7.0"
+    "better-sqlite3": "^11.7.0",
+    "commander": "^14.0.3",
+    "httpx": "^3.0.1",
+    "yaml": "^2.8.3"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",

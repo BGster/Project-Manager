@@ -9,6 +9,7 @@
 
 import { join } from "path";
 import Database from "better-sqlite3";
+import { ensureNode } from "./topology";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -181,6 +182,8 @@ export function createMemory(opts: CreateMemoryOptions, dbPath?: string): Memory
       opts.updated_at ?? t,
       opts.expires_at ?? null,
     );
+    // Sync to topology: create corresponding memory_nodes entry
+    ensureNode(dbPath ?? DEFAULT_DB_PATH, String(opts.id), String(opts.category), String(opts.file_path ?? opts.id));
     return getMemoryById(opts.id, dbPath)!;
   } finally {
     d.close();
@@ -374,6 +377,68 @@ export function updateChunk(
     params.push(chunkId);
     d.prepare(`UPDATE chunks SET ${fields.join(", ")} WHERE chunk_id = ?`).run(...params);
     return getChunkById(chunkId, dbPath);
+  } finally {
+    d.close();
+  }
+}
+
+/**
+ * Upsert a memory (insert or replace).
+ */
+export function upsertMemory(
+  opts: CreateMemoryOptions,
+  dbPath?: string,
+): Memory {
+  const d = getDb(dbPath);
+  const t = now();
+  try {
+    d.prepare(
+      `INSERT OR REPLACE INTO memories (id, category, priority, status, type, file_path, chunk_count, created_at, updated_at, expires_at, deprecated)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+    ).run(
+      opts.id,
+      opts.category,
+      opts.priority ?? null,
+      opts.status ?? null,
+      opts.type ?? null,
+      opts.file_path,
+      opts.chunk_count ?? 0,
+      opts.created_at ?? t,
+      opts.updated_at ?? t,
+      opts.expires_at ?? null,
+    );
+    // Sync to topology: create corresponding memory_nodes entry
+    ensureNode(dbPath ?? DEFAULT_DB_PATH, String(opts.id), String(opts.category), String(opts.file_path ?? opts.id));
+    return getMemoryById(opts.id, dbPath)!;
+  } finally {
+    d.close();
+  }
+}
+
+/**
+ * Upsert a chunk (insert or replace).
+ */
+export function upsertChunk(
+  opts: CreateChunkOptions,
+  dbPath?: string,
+): Chunk {
+  const d = getDb(dbPath);
+  const t = now();
+  try {
+    d.prepare(
+      `INSERT OR REPLACE INTO chunks (chunk_id, parent_id, chunk_index, content, content_hash, embedding, created_at, updated_at, deprecated)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`
+    ).run(
+      opts.chunk_id,
+      opts.parent_id,
+      opts.chunk_index,
+      opts.content,
+      opts.content_hash ?? null,
+      opts.embedding ?? null,
+      opts.created_at ?? t,
+      opts.updated_at ?? t,
+    );
+    return getChunkById(opts.chunk_id, dbPath)!;
   } finally {
     d.close();
   }

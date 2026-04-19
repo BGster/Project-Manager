@@ -120,30 +120,47 @@ export function computeFreshness(updatedAt?: number): number {
   return Math.max(0.0, Math.min(1.0, 1.0 - ageHours / 720));
 }
 
-// ─── Vector Similarity (Stubbed) ────────────────────────────────────────────
+// ─── Vector Similarity ────────────────────────────────────────────────────
 
 /**
- * computeVectorSimilarity — stubbed.
- * Returns a placeholder similarity score. Replace with actual embedding
- * provider (Ollama / OpenAI) integration in production.
+ * computeVectorSimilarity — cosine similarity between two vectors.
  */
 export function computeVectorSimilarity(
-  _queryEmbedding: number[],
-  _candidateEmbedding: number[]
+  queryEmbedding: number[],
+  candidateEmbedding: number[]
 ): number {
-  // TODO: Replace with real cosine similarity once embedding provider is wired.
-  // Placeholder: return uniform random score for testing purposes.
-  return 0.5;
+  if (queryEmbedding.length !== candidateEmbedding.length) return 0;
+  let dot = 0, normA = 0, normB = 0;
+  for (let i = 0; i < queryEmbedding.length; i++) {
+    dot += queryEmbedding[i] * candidateEmbedding[i];
+    normA += queryEmbedding[i] * queryEmbedding[i];
+    normB += candidateEmbedding[i] * candidateEmbedding[i];
+  }
+  const denom = Math.sqrt(normA) * Math.sqrt(normB);
+  return denom === 0 ? 0 : dot / denom;
 }
 
 /**
- * embedQuery — stubbed.
- * Returns a zero vector. Replace with actual embedding call.
+ * embedQuery — stubbed (returns zero vector).
+ * Use embedQueryWithEmbedder for production.
  */
 export async function embedQuery(_text: string): Promise<number[]> {
-  // TODO: Wire to Ollama / OpenAI embedder.
-  // Return zero vector matching embedder dimensions.
   return Array(1024).fill(0);
+}
+
+/**
+ * embedQueryWithEmbedder — embed a single text using the provided embedder.
+ */
+export async function embedQueryWithEmbedder(
+  text: string,
+  embedder: import("../core/embedder").Embedder
+): Promise<number[]> {
+  try {
+    const results = await embedder.embed([text]);
+    return results[0] ?? [];
+  } catch {
+    return [];
+  }
 }
 
 // ─── Semantic Recall (Stubbed) ───────────────────────────────────────────────

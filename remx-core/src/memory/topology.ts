@@ -176,7 +176,6 @@ export function insertRelation(opts: InsertRelationOptions): number {
     for (let i = 0; i < nodeIds.length; i++) {
       participantStmt.run(relId, nodeIds[i], roles[i]);
     }
-    db.exec("COMMIT");
     return relId;
   } finally {
     db.close();
@@ -228,7 +227,13 @@ export function queryRelations(
     const results: RelationWithParticipants[] = [];
     for (const row of rows) {
       // Context filter: NULL = global always matches
-      if (row.context != null && row.context !== (currentContext ?? "")) {
+      if (
+        row.context != null &&
+        row.context !== DEFAULT_CONTEXT &&
+        currentContext != null &&
+        currentContext !== DEFAULT_CONTEXT &&
+        row.context !== currentContext
+      ) {
         continue;
       }
       const participants = db
@@ -264,14 +269,16 @@ export function getRelatedNodes(
   try {
     const visited: Record<string, RelatedNodeData> = {};
     let frontier: Set<string> = new Set([nodeId]);
+    let depth = 0;
 
-    for (let depth = 1; depth <= maxDepth; depth++) {
-      if (frontier.size === 0) break;
+    // BFS: maxDepth=N runs N iterations (depth 1..N), discovering next frontier at depth+1
+    // maxDepth=1 → [node1,node2], maxDepth=2 → [node1,node2,node3,node4], maxDepth=3 → all 5
+    while (depth <= maxDepth) {
+      depth++;
       const nextFrontier: Set<string> = new Set();
 
       for (const nid of frontier) {
         if (nid in visited) continue;
-
         const nodeRow = db
           .prepare("SELECT * FROM memory_nodes WHERE id = ?")
           .get(nid) as MemoryNode | undefined;
@@ -284,7 +291,6 @@ export function getRelatedNodes(
           relations: rels,
           depth,
         };
-
         for (const rel of rels) {
           for (const p of rel.participants) {
             if (p.node_id !== nid && !(p.node_id in visited)) {

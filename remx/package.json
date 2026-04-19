@@ -1,0 +1,26 @@
+{
+  "name": "@remx/skill",
+  "version": "0.3.0",
+  "description": "RemX Skill — intelligent memory management with hooks for OpenClaw",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "openclaw": {
+    "extensions": ["./dist/plugin.js"],
+    "hooks": ["./hooks/remx"]
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "yaml": "^2.6.0",
+    "better-sqlite3": "^11.7.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

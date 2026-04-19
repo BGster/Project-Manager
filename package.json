@@ -1,0 +1,16 @@
+{
+  "name": "remx",
+  "version": "0.3.0",
+  "description": "RemX — intelligent memory management with semantic recall and decay for OpenClaw",
+  "private": true,
+  "workspaces": [
+    "remx-core"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "dev": "npm run build --workspaces"
+  },
+  "dependencies": {
+    "remx-core": "file:./remx-core"
+  }
+}

@@ -73,6 +73,9 @@ CREATE TABLE IF NOT EXISTS memory_relation_participants (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     relation_id INTEGER NOT NULL REFERENCES memory_relations(id) ON DELETE CASCADE,
     node_id     TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE,
+    -- Cascade cleanup: when a participant row is deleted, remove relations with no remaining participants
+    -- This is handled via application-level cleanup in deleteNode instead of a trigger
+    -- (triggers can't mutate other tables in some SQLite configurations)
     role        TEXT NOT NULL,
     UNIQUE(relation_id, node_id, role)
 );
@@ -130,7 +133,10 @@ export function upsertNode(
 export function deleteNode(dbPath: string, nodeId: string): void {
   const d = db(dbPath);
   try {
-    // Foreign key cascade handles participants
+    // Delete all relations that this node participates in (full relation removal, not just participant row)
+    d.prepare(`DELETE FROM memory_relations WHERE id IN (SELECT relation_id FROM memory_relation_participants WHERE node_id = ?)`).run(nodeId);
+    // Foreign key cascade will handle participant rows for the deleted relations
+    // Then delete the node itself
     d.prepare("DELETE FROM memory_nodes WHERE id = ?").run(nodeId);
   } finally {
     d.close();
@@ -190,11 +196,18 @@ export function queryTriples(opts: QueryTriplesOptions): Array<{
       WHERE r.id IN (
           SELECT relation_id FROM memory_relation_participants WHERE node_id = ?
       )`;
+    const params: (string | number)[] = [nodeId];
     if (context) {
-      sql += ` AND (r.context IS NULL OR r.context = '${context.replace(/'/g, "''")}')`;
+      if (context === 'any') {
+        // 'any' is a wildcard: match all contexts (including NULL and any specific context)
+        // No additional condition needed — all relations match
+      } else {
+        sql += ` AND (r.context IS NULL OR r.context = ?)`;
+        params.push(context);
+      }
     }
     sql += ` GROUP BY r.id;`;
-    return d.prepare(sql).all(nodeId) as Array<{
+    return d.prepare(sql).all(...params) as Array<{
       id: number;
       rel_type: RelType;
       context: string | null;
@@ -234,11 +247,17 @@ export function listTriples(dbPath: string, context?: string): Array<{
           GROUP_CONCAT(p.node_id || ':' || p.role, ' | ') AS participants_raw
       FROM memory_relations r
       JOIN memory_relation_participants p ON p.relation_id = r.id`;
+    const params: string[] = [];
     if (context) {
-      sql += ` WHERE r.context = '${context.replace(/'/g, "''")}' OR r.context IS NULL`;
+      if (context === 'any') {
+        // 'any' is a wildcard: match all contexts (no filter)
+      } else {
+        sql += ` WHERE r.context = ? OR r.context IS NULL`;
+        params.push(context);
+      }
     }
     sql += ` GROUP BY r.id;`;
-    return d.prepare(sql).all() as ReturnType<typeof listTriples>;
+    return d.prepare(sql).all(...params) as ReturnType<typeof listTriples>;
   } finally {
     d.close();
   }
@@ -250,7 +269,7 @@ export function listTriples(dbPath: string, context?: string): Array<{
 export function parseParticipants(raw: string): Array<{ node_id: string; role: string }> {
   if (!raw) return [];
   return raw.split(" | ").map((p) => {
-    const [node_id, role] = p.split(":");
+    const [node_id, role] = p.split(":", 2);
     return { node_id, role };
   });
 }

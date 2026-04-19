@@ -1,0 +1,36 @@
+{
+  "id": "remx",
+  "name": "RemX",
+  "description": "Intelligent memory management with semantic recall and decay for OpenClaw",
+  "version": "0.3.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "dbPath": {
+        "type": "string",
+        "description": "Path to RemX database"
+      },
+      "metaPath": {
+        "type": "string",
+        "description": "Path to meta.yaml"
+      },
+      "minContentLength": {
+        "type": "number",
+        "default": 30
+      },
+      "skipEmbed": {
+        "type": "boolean",
+        "default": true
+      }
+    }
+  },
+  "hooks": [
+    "../hooks/remx"
+  ],
+  "skills": {
+    "roots": [
+      "./skills"
+    ]
+  }
+}
