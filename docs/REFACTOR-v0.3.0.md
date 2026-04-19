@@ -32,14 +32,13 @@ remx-core/src/
 │   ├── schema.ts
 │   ├── storage.ts
 │   ├── chunker.ts
-│   └── embedder.ts
+│   ├── embedder.ts
+│   └── db.ts           ← shared/db.ts 已移入
 ├── memory/
-│   ├── crud.ts         # Memory chunk CRUD（files/chunks 表）
-│   ├── topology.ts    # 图遍历 + 三表 CRUD
+│   ├── memory.ts       # 记忆块 CRUD + GC + retrieve
+│   ├── graph.ts        # 图结构 + 三表 CRUD + 拓扑遍历
 │   └── recall.ts       # 召回逻辑
-└── runtime/
-    ├── db.ts           # GC、retrieve（与 memory/crud 部分重叠）
-    └── triple-store.ts # 纯转发 → memory/topology
+└── shared/             ← 已删除，db.ts 移入 core/
 ```
 
 ---
