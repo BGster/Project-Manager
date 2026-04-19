@@ -73,6 +73,12 @@ export interface RelatedNodeData {
   depth: number;
 }
 
+export interface QueryTriplesOptions {
+  nodeId: string;
+  context?: string;
+  dbPath?: string;
+}
+
 // ─── Node CRUD ───────────────────────────────────────────────────────────────
 
 export function ensureNode(dbPath: string, nodeId: string, category: string, chunk: string): void {
@@ -105,12 +111,11 @@ export function listNodes(
   }
 }
 
-export function getNode(dbPath: string, nodeId: string): MemoryNode | null {
-  const db = getDb(dbPath);
+export function getNode(dbPath?: string, nodeId?: string): MemoryNode | null {
+  if (!nodeId) return null;
+  const db = getDb(dbPath ?? DEFAULT_DB);
   try {
-    return (
-      (db.prepare("SELECT * FROM memory_nodes WHERE id = ?").get(nodeId) as MemoryNode) ?? null
-    );
+    return (db.prepare("SELECT * FROM memory_nodes WHERE id = ?").get(nodeId) as MemoryNode) ?? null;
   } finally {
     db.close();
   }
@@ -119,10 +124,109 @@ export function getNode(dbPath: string, nodeId: string): MemoryNode | null {
 export function deleteNode(dbPath: string, nodeId: string): void {
   const db = getDb(dbPath);
   try {
+    db.prepare(`DELETE FROM memory_relations WHERE id IN (SELECT relation_id FROM memory_relation_participants WHERE node_id = ?)`).run(nodeId);
     db.prepare("DELETE FROM memory_nodes WHERE id = ?").run(nodeId);
   } finally {
     db.close();
   }
+}
+
+export function upsertNode(dbPath: string, nodeId: string, category: string, chunk: string): void {
+  const db = getDb(dbPath);
+  try {
+    db.prepare(
+      `INSERT INTO memory_nodes (id, category, chunk)
+       VALUES (?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         category = excluded.category,
+         chunk    = excluded.chunk`
+    ).run(nodeId, category, chunk);
+  } finally {
+    db.close();
+  }
+}
+
+export function queryTriples(opts: QueryTriplesOptions): Array<{
+  id: number;
+  rel_type: RelType;
+  context: string | null;
+  description: string | null;
+  participants_raw: string;
+}> {
+  const { nodeId, context, dbPath } = opts;
+  const db = getDb(dbPath);
+  try {
+    let sql = `
+      SELECT DISTINCT
+          r.id,
+          r.rel_type,
+          r.context,
+          r.description,
+          GROUP_CONCAT(p.node_id || ':' || p.role, ' | ') AS participants_raw
+      FROM memory_relations r
+      JOIN memory_relation_participants p ON p.relation_id = r.id
+      WHERE r.id IN (
+          SELECT relation_id FROM memory_relation_participants WHERE node_id = ?
+      )`;
+    const params: (string | number)[] = [nodeId];
+    if (context) {
+      if (context !== 'any') {
+        sql += ` AND (r.context IS NULL OR r.context = ?)`;
+        params.push(context);
+      }
+    }
+    sql += ` GROUP BY r.id;`;
+    return db.prepare(sql).all(...params) as Array<{
+      id: number; rel_type: RelType; context: string | null;
+      description: string | null; participants_raw: string;
+    }>;
+  } finally {
+    db.close();
+  }
+}
+
+export function deleteTriple(dbPath: string, relationId: number): void {
+  deleteRelation(dbPath, relationId);
+}
+
+export function listTriples(dbPath: string, context?: string): Array<{
+  id: number;
+  rel_type: RelType;
+  context: string | null;
+  description: string | null;
+  participants_raw: string;
+}> {
+  const db = getDb(dbPath);
+  try {
+    let sql = `
+      SELECT
+          r.id,
+          r.rel_type,
+          r.context,
+          r.description,
+          GROUP_CONCAT(p.node_id || ':' || p.role, ' | ') AS participants_raw
+      FROM memory_relations r
+      JOIN memory_relation_participants p ON p.relation_id = r.id`;
+    const params: string[] = [];
+    if (context) {
+      if (context !== 'any') {
+        sql += ` WHERE r.context = ? OR r.context IS NULL`;
+        params.push(context);
+      }
+    }
+    sql += ` GROUP BY r.id;`;
+    return db.prepare(sql).all(...params) as ReturnType<typeof listTriples>;
+  } finally {
+    db.close();
+  }
+}
+
+export function parseParticipants(raw: string): Array<{ node_id: string; role: string }> {
+  if (!raw) return [];
+  return raw.split(" | ").map((p) => {
+    const [node_id, role] = p.split(":", 2);
+    return { node_id, role };
+  });
 }
 
 // ─── Relation CRUD ────────────────────────────────────────────────────────────
