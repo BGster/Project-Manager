@@ -191,9 +191,9 @@ initDb() 结构：
 ### Phase 1：止血（不改架构，只修 bug）
 
 - [x] P1 fix：`crud.ts` 加载 vec0（已提交）
-- [ ] P1 fix：`topology.ts` 加载 vec0 + foreign_keys
-- [ ] P1 fix：`recall.ts` 加载 foreign_keys
-- [ ] P1 fix：`triple-store.ts` 加载 foreign_keys
+- [x] P1 fix：`topology.ts` 加载 vec0 + foreign_keys
+- [x] P1 fix：`recall.ts` 加载 foreign_keys
+- [x] P1 fix：`triple-store.ts` 加载 foreign_keys
 
 ### Phase 2：抽取共享层（中等风险，可独立测试）
 

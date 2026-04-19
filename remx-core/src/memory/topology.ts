@@ -7,6 +7,7 @@
  */
 
 import Database from "better-sqlite3";
+import { accessSync } from "fs";
 import { join } from "path";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -74,10 +75,23 @@ export interface RelatedNodeData {
 
 const DEFAULT_DB_PATH = join(process.env.HOME ?? "", ".openclaw", "memory", "main.sqlite");
 
+function findVecExtension(): string | null {
+  const candidates = [
+    `${__dirname}/../../../node_modules/sqlite-vec-linux-x64/vec0.so`,
+    `${__dirname}/../../node_modules/sqlite-vec-linux-x64/vec0.so`,
+  ];
+  for (const p of candidates) {
+    try { accessSync(p); return p; } catch { /* skip */ }
+  }
+  return null;
+}
+
 export function getDb(dbPath?: string): Database.Database {
   const db = new Database(dbPath ?? DEFAULT_DB_PATH);
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
+  const vecExt = findVecExtension();
+  if (vecExt) { try { db.loadExtension(vecExt); } catch { /* vec0 unavailable */ } }
   return db;
 }
 

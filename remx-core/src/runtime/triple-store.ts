@@ -15,7 +15,7 @@ import { insertRelation, deleteRelation, queryRelations, listNodes, ensureNode, 
 
 const DEFAULT_DB = join(process.env.HOME ?? "", ".openclaw", "memory", "main.sqlite");
 
-function db(dbPath?: string): Database.Database {
+function getDb(dbPath?: string): Database.Database {
   const d = new Database(dbPath ?? DEFAULT_DB);
   d.pragma("journal_mode = WAL");
   d.pragma("foreign_keys = ON");
@@ -85,7 +85,7 @@ CREATE INDEX IF NOT EXISTS idx_relations_context ON memory_relations(context);
 `;
 
 export function initSchema(dbPath?: string): void {
-  const d = db(dbPath);
+  const d = getDb(dbPath);
   try {
     for (const stmt of TOPOLOGY_TABLES_SQL.trim().split(";")) {
       const s = stmt.trim();
@@ -102,7 +102,7 @@ export { ensureNode, listNodes };
 
 export function getNode(dbPath?: string, nodeId?: string): MemoryNode | null {
   if (!nodeId) return null;
-  const d = db(dbPath);
+  const d = getDb(dbPath);
   try {
     return (d.prepare("SELECT * FROM memory_nodes WHERE id = ?").get(nodeId) as MemoryNode) ?? null;
   } finally {
@@ -116,7 +116,7 @@ export function upsertNode(
   category: string,
   chunk: string
 ): void {
-  const d = db(dbPath);
+  const d = getDb(dbPath);
   try {
     d.prepare(
       `INSERT INTO memory_nodes (id, category, chunk)
@@ -131,7 +131,7 @@ export function upsertNode(
 }
 
 export function deleteNode(dbPath: string, nodeId: string): void {
-  const d = db(dbPath);
+  const d = getDb(dbPath);
   try {
     // Delete all relations that this node participates in (full relation removal, not just participant row)
     d.prepare(`DELETE FROM memory_relations WHERE id IN (SELECT relation_id FROM memory_relation_participants WHERE node_id = ?)`).run(nodeId);
@@ -182,7 +182,7 @@ export function queryTriples(opts: QueryTriplesOptions): Array<{
   participants_raw: string;
 }> {
   const { nodeId, context, dbPath } = opts;
-  const d = db(dbPath);
+  const d = getDb(dbPath);
   try {
     let sql = `
       SELECT DISTINCT
@@ -236,7 +236,7 @@ export function listTriples(dbPath: string, context?: string): Array<{
   description: string | null;
   participants_raw: string;
 }> {
-  const d = db(dbPath);
+  const d = getDb(dbPath);
   try {
     let sql = `
       SELECT

@@ -59,6 +59,7 @@ const DEFAULT_DB_PATH = join(process.env.HOME ?? "", ".openclaw", "memory", "mai
 function getDb(dbPath?: string): Database.Database {
   const d = new Database(dbPath ?? DEFAULT_DB_PATH);
   d.pragma("journal_mode = WAL");
+  d.pragma("foreign_keys = ON");
   return d;
 }
 
