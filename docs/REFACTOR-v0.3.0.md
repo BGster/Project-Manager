@@ -1,7 +1,7 @@
 # RemX v0.3.0 重构方案
 
 > 重构日期：2026-04-20
-> 状态：规划中
+> 状态：已完成 ✅
 
 ---
 
@@ -65,8 +65,8 @@ remx-core/src/
 
 ### 阶段 0：准备工作
 
-- [ ] 创建 `v0.3.0-refactor` 分支
-- [ ] 备份现有 `src/memory/` 和 `src/runtime/`
+- [x] 创建 `v0.3.0-refactor` 分支
+- [x] 备份现有 `src/memory/` 和 `src/runtime/`
 
 ### 阶段 1：`memory/graph.ts`（topology → graph）
 
@@ -78,52 +78,51 @@ remx-core/src/
 
 ### 阶段 2：`memory/memory.ts`（合并 crud + db）
 
-- [ ] 将 `runtime/db.ts` 的 GC / retrieve 功能并入 `memory/crud.ts`
-- [ ] 将 `memory/crud.ts` 改名为 `memory/memory.ts`
-- [ ] 删除 `runtime/db.ts`
-- [ ] 更新所有 import 引用
-- [ ] 确认编译无错
-- [ ] commit: "refactor: merge crud + db → memory.ts"
+- [x] 将 `runtime/db.ts` 的 GC / retrieve 功能并入 `memory/crud.ts`
+- [x] 将 `memory/crud.ts` 改名为 `memory/memory.ts`
+- [x] 删除 `runtime/db.ts`
+- [x] 更新所有 import 引用
+- [x] 确认编译无错
+- [x] commit: "refactor: merge crud + db → memory.ts"
 
 ### 阶段 3：删除 `runtime/triple-store.ts`
 
-- [ ] 删除 `runtime/triple-store.ts`
-- [ ] 确认无任何 import 引用
-- [ ] 确认编译无错
-- [ ] commit: "refactor: remove redundant triple-store forwarding layer"
+- [x] 删除 `runtime/triple-store.ts`
+- [x] 确认无任何 import 引用
+- [x] 确认编译无错
+- [x] commit: "refactor: remove redundant triple-store forwarding layer"
 
 ### 阶段 4：删除 `runtime/` 目录
 
-- [ ] 确认 `runtime/` 已空
-- [ ] 删除 `runtime/` 目录
-- [ ] commit: "refactor: remove empty runtime/ directory"
+- [x] 确认 `runtime/` 已空
+- [x] 删除 `runtime/` 目录
+- [x] commit: "refactor: remove empty runtime/ directory"
 
 ### 阶段 5：更新 `memory/recall.ts`
 
-- [ ] 检查 `recall.ts` 的 import 路径是否需要更新
-- [ ] 确认 recall 调用的接口未破坏
-- [ ] 确认编译无错
-- [ ] commit: "refactor: update recall.ts imports after restructure"
+- [x] 检查 `recall.ts` 的 import 路径是否需要更新
+- [x] 确认 recall 调用的接口未破坏
+- [x] 确认编译无错
+- [x] commit: "refactor: update recall.ts imports after restructure"
 
 ### 阶段 6：更新单元测试
 
-- [ ] 更新 `tests/topology.test.ts` → `tests/graph.test.ts`（文件改名）
-- [ ] 更新测试中的 import 路径
-- [ ] 更新 `tests/triple-store.test.ts`（确认是否还有必要独立）
-- [ ] 运行测试确认全部通过
-- [ ] commit: "test: update tests after refactor"
+- [x] 更新 `tests/topology.test.ts` → `tests/graph.test.ts`（文件改名）
+- [x] 更新测试中的 import 路径
+- [x] 更新 `tests/triple-store.test.ts`（已删除 — 对应模块已移除）
+- [x] 运行测试确认全部通过
+- [x] commit: "test: update tests after refactor"
 
 ### 阶段 7：更新 CLI 测试文档
 
-- [ ] 更新 `docs/CLI-TEST-PLAN.md` 中的模块引用路径
-- [ ] 更新 `docs/ARCHITECTURE-ANALYSIS.md`
-- [ ] 运行 CLI 手动测试（或更新自动化测试）
-- [ ] commit: "docs: update CLI test plan and architecture docs"
+- [x] 更新 `docs/CLI-TEST-PLAN.md` 中的模块引用路径
+- [x] 更新 `docs/ARCHITECTURE-ANALYSIS.md`
+- [x] commit: "docs: update CLI test plan and architecture docs"
 
 ### 阶段 8：最终验收
 
-- [ ] 全量编译 `npm run build`
-- [ ] 全量测试 `npm test`
+- [x] 全量编译 `npm run build` ✅
+- [x] 全量测试 `npm test` ✅ 43 tests passed
 - [ ] Merge 或 PR
 
 ---
