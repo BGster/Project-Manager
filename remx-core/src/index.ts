@@ -49,9 +49,9 @@ export {
   type UnifiedRecallOptions,
 } from "./memory/recall";
 
-// memory/crud — hide conflicting names behind an alias
+// memory/crud — aligned with OpenClaw files/chunks model
+// Removed: initSchema (use runtime/db initDb), createChunk, updateChunk (replaced by upsertChunk)
 export {
-  initSchema as initCrudSchema,
   getMemoryById,
   listMemories,
   createMemory,
@@ -62,12 +62,12 @@ export {
   createMemoryWithChunks,
   getMemoryWithChunks,
   upsertChunks,
+  upsertChunk,
   listChunks,
-  createChunk,
   getChunkById,
-  updateChunk,
   softDeleteChunk,
   contentHash,
+  contentHashSync,
   expiresAtTTL,
   isExpired,
   findExpiredMemories,

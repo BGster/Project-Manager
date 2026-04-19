@@ -68,7 +68,9 @@ interface FileContext {
 
 interface ChunkRecord {
   chunk_id: string;
-  chunk_index: number;
+  path: string;             // memory path (FK)
+  start_line: number;
+  end_line: number;
   content: string;
   content_hash: string;
   embedding: number[] | null;
@@ -234,24 +236,31 @@ function _buildMemoryAndChunks(
     const contentHashVal = contentHashSync(ch.content);
     return {
       chunk_id: ch.chunk_id,
-      chunk_index: i,
+      path: ctx.filePath,
+      start_line: ch.para_indices[0] ?? 0,
+      end_line: ch.para_indices[ch.para_indices.length - 1] ?? 0,
       content: ch.content,
       content_hash: contentHashVal,
       embedding: null, // will be filled below if embedder provided
     };
   });
 
+  // "status: deprecated" in front-matter → mark as soft-deleted immediately
+  const isDeprecated = ctx.status === "deprecated";
+
   const memory = {
-    id: memoryId,
+    path: ctx.filePath,
     category: ctx.category,
     priority: ctx.priority,
-    status: ctx.status,
+    status: isDeprecated ? "open" : (ctx.status ?? "open"),
     type: ctx.docType,
-    file_path: ctx.filePath,
+    hash: "",
+    mtime: 0,
     chunk_count: chunks.length,
     created_at: ctx.createdAt,
     updated_at: ctx.now,
     expires_at: expiresAt ?? null,
+    _deprecated: isDeprecated ? 1 : 0,
   };
 
   return { memory, chunkRecords };
@@ -287,13 +296,13 @@ async function _checkSemanticDedup(
 
   const dupes: Array<{ chunkId: string; existingPath: string; similarity: number }> = [];
 
-  // Load existing embeddings from memories_vec
+  // Load existing embeddings from chunks_vec (vec0 virtual table, Float32 Buffer)
   const { getDb } = await import("../runtime/db");
   const d = getDb(dbPath);
   try {
     const rows = d
-      .prepare("SELECT chunk_id, embedding FROM memories_vec")
-      .all() as Array<{ chunk_id: string; embedding: string }>;
+      .prepare("SELECT id, embedding FROM chunks_vec")
+      .all() as Array<{ id: string; embedding: unknown }>;
 
     for (const ch of chunkRecords) {
       if (!ch.embedding) continue;
@@ -301,27 +310,23 @@ async function _checkSemanticDedup(
       for (const row of rows) {
         let existingEmbedding: number[];
         try {
-          existingEmbedding = JSON.parse(row.embedding) as number[];
+          const buf = row.embedding as Buffer;
+          existingEmbedding = Array.from(new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4));
         } catch {
           continue;
         }
-        if (existingEmbedding.length !== ch.embedding!.length) continue;
+        if (existingEmbedding.length !== ch.embedding.length) continue;
 
         // L2 distance → cosine similarity
-        const dist = l2Distance(ch.embedding!, existingEmbedding);
+        const dist = l2Distance(ch.embedding, existingEmbedding);
         const similarity = 1 / (1 + dist);
         if (similarity >= threshold) {
-          // Get file_path for this chunk
+          // Get file path for this chunk
           const chunkRow = d
-            .prepare("SELECT content, parent_id FROM chunks WHERE chunk_id = ?")
-            .get(row.chunk_id) as { parent_id: string } | undefined;
-          if (chunkRow) {
-            const memRow = d
-              .prepare("SELECT file_path FROM memories WHERE id = ?")
-              .get(chunkRow.parent_id) as { file_path: string } | undefined;
-            if (memRow && memRow.file_path !== ctx.filePath) {
-              dupes.push({ chunkId: ch.chunk_id, existingPath: memRow.file_path, similarity });
-            }
+            .prepare("SELECT path FROM chunks WHERE id = ?")
+            .get(row.id) as { path: string } | undefined;
+          if (chunkRow && chunkRow.path !== ctx.filePath) {
+            dupes.push({ chunkId: ch.chunk_id, existingPath: chunkRow.path, similarity });
           }
         }
       }
@@ -350,7 +355,6 @@ async function _writeMemoryToDb(
   chunkRecords: ChunkRecord[],
   embedder: Embedder | undefined,
 ): Promise<void> {
-  // Ensure DB is initialized with memories_vec table
   initDb(dbPath);
 
   const { upsertMemory, upsertChunk } = await import("../memory/crud");
@@ -364,15 +368,41 @@ async function _writeMemoryToDb(
     }
   }
 
-  // Upsert memory
+  // If front-matter status was "deprecated", soft-delete the memory immediately
+  if ((memory["_deprecated"] as number) === 1) {
+    const { deleteMemory } = await import("../memory/crud");
+    const path = memory["path"] as string;
+    // Write memory first so it exists, then soft-delete
+    upsertMemory(
+      {
+        path: memory["path"] as string,
+        category: memory["category"] as string,
+        priority: memory["priority"] as Priority | undefined,
+        status: "open",
+        type: memory["type"] as MemoryType | undefined,
+        hash: "",
+        mtime: 0,
+        chunk_count: memory["chunk_count"] as number,
+        created_at: memory["created_at"] as string,
+        updated_at: memory["updated_at"] as string,
+        expires_at: memory["expires_at"] as string | null,
+      },
+      dbPath,
+    );
+    deleteMemory(path, {}, dbPath);
+    return;
+  }
+
+  // Upsert memory (path IS the file path, used as ID)
   upsertMemory(
     {
-      id: memory["id"] as string,
+      path: memory["path"] as string,
       category: memory["category"] as string,
       priority: memory["priority"] as Priority | undefined,
       status: memory["status"] as MemoryStatus | undefined,
       type: memory["type"] as MemoryType | undefined,
-      file_path: memory["file_path"] as string,
+      hash: "",
+      mtime: 0,
       chunk_count: memory["chunk_count"] as number,
       created_at: memory["created_at"] as string,
       updated_at: memory["updated_at"] as string,
@@ -385,29 +415,20 @@ async function _writeMemoryToDb(
   for (const ch of chunkRecords) {
     upsertChunk(
       {
-        chunk_id: ch.chunk_id,
-        parent_id: memory["id"] as string,
-        chunk_index: ch.chunk_index,
+        id: ch.chunk_id,
+        path: ch.path,
+        start_line: ch.start_line,
+        end_line: ch.end_line,
         content: ch.content,
         content_hash: ch.content_hash,
       },
       dbPath,
     );
 
-    // Write vector to memories_vec
+    // Write vector to chunks_vec
     if (ch.embedding) {
       upsertVector(dbPath, ch.chunk_id, ch.embedding);
     }
-  }
-
-  // Update chunk_count on memory
-  const { getDb } = await import("../runtime/db");
-  const d = getDb(dbPath);
-  try {
-    d.prepare("UPDATE memories SET chunk_count = ? WHERE id = ?")
-      .run(chunkRecords.length, memory["id"]);
-  } finally {
-    d.close();
   }
 }
 
@@ -470,7 +491,7 @@ export async function runIndex(opts: {
   await _writeMemoryToDb(dbPath, memory, chunkRecords, embedder);
 
   return {
-    memoryId: memory["id"] as string,
+    memoryId: memory["path"] as string,
     category: memory["category"] as string,
     chunkCount: memory["chunk_count"] as number,
     expiresAt: memory["expires_at"] as string | undefined,

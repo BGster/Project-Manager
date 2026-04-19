@@ -6,7 +6,6 @@
  *   remx stats --db <path> [--meta <path>]
  */
 import { Command } from "commander";
-import { join } from "path";
 import Database from "better-sqlite3";
 
 export function makeStatsCommand(): Command {
@@ -21,36 +20,34 @@ export function makeStatsCommand(): Command {
     d.pragma("journal_mode = WAL");
 
     try {
-      // Category counts
+      // Category counts (remx_lifecycle)
       const catRows = d
         .prepare(
-          `SELECT category, COUNT(*) as cnt FROM memories WHERE deprecated = 0 GROUP BY category ORDER BY cnt DESC`
+          `SELECT category, COUNT(*) as cnt FROM remx_lifecycle WHERE deprecated = 0 GROUP BY category ORDER BY cnt DESC`
         )
         .all() as { category: string; cnt: number }[];
 
-      // Total active memories
+      // Total active
       const totalMem = (
-        d.prepare(`SELECT COUNT(*) as cnt FROM memories WHERE deprecated = 0`).get() as { cnt: number }
+        d.prepare(`SELECT COUNT(*) as cnt FROM remx_lifecycle WHERE deprecated = 0`).get() as { cnt: number }
       ).cnt;
 
       // Total deprecated
       const totalDep = (
-        d.prepare(`SELECT COUNT(*) as cnt FROM memories WHERE deprecated = 1`).get() as { cnt: number }
+        d.prepare(`SELECT COUNT(*) as cnt FROM remx_lifecycle WHERE deprecated = 1`).get() as { cnt: number }
       ).cnt;
 
-      // Total chunks
+      // Total chunks (non-deprecated)
       const totalChunks = (
-        d
-          .prepare(`SELECT COUNT(*) as cnt FROM chunks WHERE deprecated = 0`)
-          .get() as { cnt: number }
-      ).cnt;
+        d.prepare(`SELECT COUNT(*) as cnt FROM chunks WHERE deprecated = 0`)
+      ).get() as { cnt: number };
 
       // Time range
       const earliest = d
-        .prepare(`SELECT MIN(created_at) as min FROM memories`)
+        .prepare(`SELECT MIN(created_at) as min FROM remx_lifecycle`)
         .get() as { min: string | null };
       const latest = d
-        .prepare(`SELECT MAX(updated_at) as max FROM memories`)
+        .prepare(`SELECT MAX(updated_at) as max FROM remx_lifecycle`)
         .get() as { max: string | null };
 
       // DB file size
@@ -68,7 +65,7 @@ export function makeStatsCommand(): Command {
       console.log(`size: ${formatBytes(dbSize)}`);
       console.log(`total memories (active): ${totalMem}`);
       console.log(`total memories (deprecated): ${totalDep}`);
-      console.log(`total chunks: ${totalChunks}`);
+      console.log(`total chunks: ${totalChunks.cnt}`);
       if (earliest.min) console.log(`earliest memory: ${earliest.min}`);
       if (latest.max) console.log(`latest update: ${latest.max}`);
       console.log(`\nby category:`);

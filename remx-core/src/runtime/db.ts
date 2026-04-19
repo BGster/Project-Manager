@@ -3,7 +3,7 @@
  * Garbage collection, retrieval, and init functions for RemX v0.3.0.
  *
  * Ported from db.py (Python) GC functions + init/retrieve.
- * Uses the memories/chunks table schema from Python db.py (not crud.ts).
+ * Uses the files/chunks table schema (aligned with OpenClaw global memory).
  */
 
 import { join } from "path";
@@ -28,64 +28,77 @@ export interface GcPurgeResult {
 }
 
 export interface RetrieveRow extends Record<string, unknown> {
-  id: string;
+  // Lifecycle (remx_lifecycle)
+  path: string;
   category: string;
   priority?: string;
-  type: string;
+  type?: string;
   status?: string;
-  file_path?: string;
-  front_matter?: string;
   deprecated: number;
   expires_at?: string;
   created_at: string;
   updated_at: string;
+  // Chunks
+  chunk_id: string;
+  start_line?: number;
+  end_line?: number;
+  chunk_hash?: string;
   content?: string;
-  chunk_id?: string;
-  chunk_index?: number;
 }
 
 export interface RetrieveFilter {
+  path?: string;
   category?: string | string[];
   priority?: string | string[];
   status?: string | string[];
   type?: string | string[];
-  file_path?: string;
   deprecated?: number;
   expires_at?: string | null | Record<string, string>;
-  id?: string;
   [key: string]: unknown;
 }
 
 // ─── Schema (Python db.py schema) ────────────────────────────────────────────
 
-const MEMORIES_COL_DEFS = `
-id TEXT PRIMARY KEY,
-category TEXT NOT NULL,
-priority TEXT DEFAULT 'P2',
-type TEXT NOT NULL,
-status TEXT DEFAULT 'active',
-file_path TEXT,
-front_matter TEXT,
-chunk_count INTEGER DEFAULT 0,
-deprecated INTEGER DEFAULT 0,
-expires_at TEXT,
-created_at TEXT NOT NULL,
-updated_at TEXT NOT NULL
+// Schema aligned with OpenClaw global memory (files/chunks model)
+type RemxLifecycleStatus = "open" | "closed" | "archived";
+
+// lifecycle is stored in remx_lifecycle table, not in chunks
+
+const FILES_COL_DEFS = `
+path TEXT PRIMARY KEY,
+source TEXT NOT NULL DEFAULT 'remx',
+hash TEXT NOT NULL,
+mtime INTEGER NOT NULL,
+size INTEGER NOT NULL
 `.trim();
 
 const CHUNKS_COL_DEFS = `
 id TEXT PRIMARY KEY,
-parent_id TEXT NOT NULL,
-chunk_id TEXT NOT NULL,
-chunk_index INTEGER NOT NULL,
-content TEXT NOT NULL,
-content_hash TEXT,
-content_tokens INTEGER,
-embedding BLOB,
+path TEXT NOT NULL,
+source TEXT NOT NULL DEFAULT 'remx',
+start_line INTEGER NOT NULL,
+end_line INTEGER NOT NULL,
+hash TEXT NOT NULL,
+model TEXT NOT NULL DEFAULT 'remx',
+text TEXT NOT NULL,
+embedding TEXT,
+updated_at INTEGER NOT NULL,
 deprecated INTEGER DEFAULT 0,
-created_at TEXT NOT NULL,
-updated_at TEXT NOT NULL,
-FOREIGN KEY (parent_id) REFERENCES memories(id) ON DELETE CASCADE
+FOREIGN KEY (path) REFERENCES files(path) ON DELETE CASCADE
+`.trim();
+
+// Lifecycle table (RemX extended fields, separate from OpenClaw files)
+const LIFECYCLE_COL_DEFS = `
+path TEXT PRIMARY KEY,
+category TEXT NOT NULL,
+priority TEXT DEFAULT 'P2',
+type TEXT,
+status TEXT DEFAULT 'open',
+deprecated INTEGER DEFAULT 0,
+expires_at TEXT,
+created_at TEXT,
+updated_at TEXT,
+FOREIGN KEY (path) REFERENCES files(path) ON DELETE CASCADE
 `.trim();
 
 // ─── DB Path ─────────────────────────────────────────────────────────────────
@@ -96,41 +109,66 @@ export function getDb(dbPath?: string): Database.Database {
   const d = new Database(dbPath ?? DEFAULT_DB);
   d.pragma("journal_mode = WAL");
   d.pragma("foreign_keys = ON");
+  // Load sqlite-vec extension for vec0 virtual table support
+  const vecExt = findVecExtension();
+  if (vecExt) {
+    try { d.loadExtension(vecExt); } catch { /* vec0 unavailable */ }
+  }
   return d;
 }
 
 // ─── Init ────────────────────────────────────────────────────────────────────
 
+// Path to sqlite-vec extension (installed via npm install sqlite-vec)
+function findVecExtension(): string | null {
+  const candidates = [
+    `${__dirname}/../../../node_modules/sqlite-vec-linux-x64/vec0.so`,
+    `${__dirname}/../../node_modules/sqlite-vec-linux-x64/vec0.so`,
+  ];
+  for (const p of candidates) {
+    try { require('fs').accessSync(p); return p; } catch { /* skip */ }
+  }
+  return null;
+}
+
 /**
- * Initialize database with memories/chunks/memories_vec tables.
- * Call with dimensions from meta.yaml (default 1024).
+ * Initialize database with files/chunks/remx_lifecycle tables.
+ * Virtual vector table (vec0) requires sqlite-vec extension loaded first.
  */
 export function initDb(dbPath: string, dimensions = 1024, reset = false): void {
   const d = getDb(dbPath);
   try {
+    // Load sqlite-vec extension before creating virtual tables
+    const vecExt = findVecExtension();
+    if (vecExt) {
+      try { d.loadExtension(vecExt); } catch { /* vec0 unavailable */ }
+    }
+
     if (reset) {
       d.exec(`
-        DROP TABLE IF EXISTS memories_vec;
         DROP TABLE IF EXISTS chunks;
-        DROP TABLE IF EXISTS memories;
+        DROP TABLE IF EXISTS remx_lifecycle;
+        DROP TABLE IF EXISTS files;
       `);
     }
 
-    d.exec(`CREATE TABLE IF NOT EXISTS memories (${MEMORIES_COL_DEFS})`);
+    d.exec(`CREATE TABLE IF NOT EXISTS files (${FILES_COL_DEFS})`);
     d.exec(`CREATE TABLE IF NOT EXISTS chunks (${CHUNKS_COL_DEFS})`);
+    d.exec(`CREATE TABLE IF NOT EXISTS remx_lifecycle (${LIFECYCLE_COL_DEFS})`);
     d.exec(
-      `CREATE TABLE IF NOT EXISTS memories_vec (chunk_id TEXT PRIMARY KEY, embedding TEXT NOT NULL)`
+      `CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[${dimensions}])`
     );
 
     // Indexes
-    d.exec(`CREATE INDEX IF NOT EXISTS idx_memories_category     ON memories(category)`);
-    d.exec(`CREATE INDEX IF NOT EXISTS idx_memories_status       ON memories(status)`);
-    d.exec(`CREATE INDEX IF NOT EXISTS idx_memories_expires_at   ON memories(expires_at)`);
-    d.exec(`CREATE INDEX IF NOT EXISTS idx_memories_deprecated   ON memories(deprecated)`);
-    d.exec(`CREATE INDEX IF NOT EXISTS idx_memories_file_path    ON memories(file_path)`);
-    d.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_parent          ON chunks(parent_id)`);
-    d.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_deprecated      ON chunks(deprecated)`);
-    d.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_content_hash    ON chunks(content_hash)`);
+    d.exec(`CREATE INDEX IF NOT EXISTS idx_files_hash        ON files(hash)`);
+    d.exec(`CREATE INDEX IF NOT EXISTS idx_files_source      ON files(source)`);
+    d.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_path        ON chunks(path)`);
+    d.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_hash        ON chunks(hash)`);
+    d.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_deprecated  ON chunks(deprecated)`);
+    d.exec(`CREATE INDEX IF NOT EXISTS idx_lifecycle_category  ON remx_lifecycle(category)`);
+    d.exec(`CREATE INDEX IF NOT EXISTS idx_lifecycle_status     ON remx_lifecycle(status)`);
+    d.exec(`CREATE INDEX IF NOT EXISTS idx_lifecycle_deprecated ON remx_lifecycle(deprecated)`);
+    d.exec(`CREATE INDEX IF NOT EXISTS idx_lifecycle_expires_at ON remx_lifecycle(expires_at)`);
   } finally {
     d.close();
   }
@@ -139,14 +177,15 @@ export function initDb(dbPath: string, dimensions = 1024, reset = false): void {
 // ─── Vector Upsert ───────────────────────────────────────────────────────────────
 
 /**
- * Upsert a chunk embedding into memories_vec (TEXT column, JSON-serialized array).
+ * Upsert a chunk embedding into chunks_vec (vec0 virtual table, Float32 Buffer).
  */
 export function upsertVector(dbPath: string, chunkId: string, embedding: number[]): void {
   const d = getDb(dbPath);
   try {
+    const vec = Float32Array.from(embedding);
     d.prepare(
-      `INSERT OR REPLACE INTO memories_vec (chunk_id, embedding) VALUES (?, ?)`
-    ).run(chunkId, JSON.stringify(embedding));
+      `INSERT OR REPLACE INTO chunks_vec (id, embedding) VALUES (?, ?)`
+    ).run(chunkId, vec);
   } finally {
     d.close();
   }
@@ -180,23 +219,23 @@ export function gcCollect(
   try {
     const now = nowIso();
 
-    // Expired memories
-    let expiredSql = `SELECT * FROM memories WHERE expires_at IS NOT NULL AND expires_at < ? AND deprecated = 0`;
+    // Expired lifecycle rows
+    let expiredSql = `SELECT lc.*, f.hash, f.mtime, f.size FROM remx_lifecycle lc JOIN files f ON f.path = lc.path WHERE lc.expires_at IS NOT NULL AND lc.expires_at < ? AND lc.deprecated = 0`;
     const expiredParams: unknown[] = [now];
 
     if (scopePath) {
-      expiredSql += ` AND file_path LIKE ?`;
+      expiredSql += ` AND lc.path LIKE ?`;
       expiredParams.push(`${scopePath}%`);
     }
 
     const expiredRows = d.prepare(expiredSql).all(...expiredParams) as Record<string, unknown>[];
 
-    // Deprecated memories
-    let deprecatedSql = `SELECT * FROM memories WHERE deprecated = 1`;
+    // Deprecated lifecycle rows
+    let deprecatedSql = `SELECT lc.*, f.hash, f.mtime, f.size FROM remx_lifecycle lc JOIN files f ON f.path = lc.path WHERE lc.deprecated = 1`;
     const deprecatedParams: unknown[] = [];
 
     if (scopePath) {
-      deprecatedSql += ` AND file_path LIKE ?`;
+      deprecatedSql += ` AND lc.path LIKE ?`;
       deprecatedParams.push(`${scopePath}%`);
     }
 
@@ -207,7 +246,7 @@ export function gcCollect(
     // Chunk count for deprecated
     const chunkCountRow = d
       .prepare(
-        `SELECT COUNT(*) as cnt FROM chunks WHERE parent_id IN (SELECT id FROM memories WHERE deprecated = 1)`
+        `SELECT COUNT(*) as cnt FROM chunks c JOIN remx_lifecycle lc ON lc.path = c.path WHERE lc.deprecated = 1`
       )
       .get() as { cnt: number };
 
@@ -234,26 +273,26 @@ export function gcSoftDelete(
   try {
     const now = nowIso();
 
-    // Soft-delete expired memories
+    // Soft-delete expired lifecycle rows → deprecated = 1
     const conditions = [`expires_at IS NOT NULL`, `expires_at < ?`, `deprecated = 0`];
     const params: unknown[] = [now];
 
     if (scopePath) {
-      conditions.push(`file_path LIKE ?`);
+      conditions.push(`path LIKE ?`);
       params.push(`${scopePath}%`);
     }
 
     const where = conditions.join(` AND `);
 
     const updateMem = d.prepare(
-      `UPDATE memories SET deprecated = 1, updated_at = ? WHERE ${where}`
+      `UPDATE remx_lifecycle SET deprecated = 1, updated_at = ? WHERE ${where}`
     );
     const memResult = updateMem.run(now, ...params);
     const expiredCount = memResult.changes;
 
-    // Soft-delete chunks of deprecated memories
+    // Soft-delete chunks of deprecated lifecycle
     const updateChunks = d.prepare(
-      `UPDATE chunks SET deprecated = 1, updated_at = ? WHERE parent_id IN (SELECT id FROM memories WHERE deprecated = 1)`
+      `UPDATE chunks SET deprecated = 1, updated_at = ? WHERE path IN (SELECT path FROM remx_lifecycle WHERE deprecated = 1)`
     );
     const chunkResult = updateChunks.run(now);
     const chunkCount = chunkResult.changes;
@@ -277,12 +316,11 @@ export function gcPurge(dbPath: string): GcPurgeResult {
     const chunkCount = chunkResult.changes;
 
     // Delete orphaned vectors (chunks already deleted above via CASCADE would
-    // also remove their vectors if FK were set, but since memories_vec is
-    // independent we clean it explicitly)
-    d.prepare(`DELETE FROM memories_vec WHERE chunk_id NOT IN (SELECT id FROM chunks)`).run();
+    // Clean up orphaned vectors
+    d.prepare(`DELETE FROM chunks_vec WHERE id NOT IN (SELECT id FROM chunks)`).run();
 
-    // Delete memories
-    const memResult = d.prepare(`DELETE FROM memories WHERE deprecated = 1`).run();
+    // Delete deprecated lifecycle rows (cascade → files → chunks)
+    const memResult = d.prepare(`DELETE FROM remx_lifecycle WHERE deprecated = 1`).run();
     const memoryCount = memResult.changes;
 
     d.exec(`VACUUM`);
@@ -349,19 +387,24 @@ export function retrieve(
     if (includeContent) {
       rows = d
         .prepare(
-          `SELECT m.*, c.content, c.chunk_id, c.chunk_index
-           FROM memories m
-           LEFT JOIN chunks c ON c.parent_id = m.id AND c.deprecated = 0
-           WHERE m.deprecated = 0 AND ${whereClause}
-           ORDER BY m.updated_at DESC
+          `SELECT lc.path, lc.category, lc.priority, lc.type, lc.status, lc.deprecated,
+                  lc.expires_at, lc.created_at, lc.updated_at,
+                  c.id as chunk_id, c.start_line, c.end_line, c.hash as chunk_hash, c.text as content
+           FROM remx_lifecycle lc
+           JOIN chunks c ON c.path = lc.path AND c.deprecated = 0
+           WHERE lc.deprecated = 0 AND ${whereClause}
+           ORDER BY lc.updated_at DESC
            LIMIT ?`
         )
         .all(...params, limit) as RetrieveRow[];
     } else {
       rows = d
         .prepare(
-          `SELECT * FROM memories WHERE deprecated = 0 AND ${whereClause}
-           ORDER BY updated_at DESC LIMIT ?`
+          `SELECT lc.path, lc.category, lc.priority, lc.type, lc.status, lc.deprecated,
+                  lc.expires_at, lc.created_at, lc.updated_at
+           FROM remx_lifecycle lc
+           WHERE lc.deprecated = 0 AND ${whereClause}
+           ORDER BY lc.updated_at DESC LIMIT ?`
         )
         .all(...params, limit) as RetrieveRow[];
     }
@@ -399,16 +442,14 @@ function cosineFromL2(query: number[], candidate: number[]): number {
  * retrieveSemantic — vector-based semantic retrieval.
  *
  * Pipeline:
- *  1. Load all embeddings from memories_vec (TEXT column → JSON array)
+ *  1. Load all embeddings from chunks_vec (vec0 virtual table, Float32 Buffer)
  *  2. Compute cosine similarity between queryEmbedding and each stored vector
- *  3. Join with chunks + memories
+ *  3. Join with chunks + remx_lifecycle
  *  4. Apply decay scoring: score = (1-decayWeight)*cosine + decayWeight*decay
- *  5. Deduplicate by memory_id (keep best chunk per memory)
+ *  5. Deduplicate by path (keep best chunk per file)
  *  6. Sort by score DESC, return top `limit` results
  *
- * Note: memories_vec stores vectors as TEXT (JSON array string) since Node.js
- * lacks struct.pack. The Python version uses BLOB with struct.pack — this is
- * the equivalent representation for portability.
+ * Vector storage: chunks_vec (vec0 virtual table), loaded via sqlite-vec extension.
  */
 export async function retrieveSemantic(
   dbPath: string,
@@ -423,59 +464,60 @@ export async function retrieveSemantic(
 
   const d = getDb(dbPath);
   try {
-    // Step 1: Load all (chunk_id, embedding) pairs from memories_vec
+    // Step 1: Load all (id, embedding) pairs from chunks_vec
     const vecRows = d
-      .prepare("SELECT chunk_id, embedding FROM memories_vec")
-      .all() as Array<{ chunk_id: string; embedding: string }>;
+      .prepare("SELECT id, embedding FROM chunks_vec")
+      .all() as Array<{ id: string; embedding: unknown }>;
 
     if (vecRows.length === 0) return [];
 
-    // Step 2: Compute similarity scores for each chunk
+    // Step 2: Compute similarity scores (vec0 stores as Float32 Buffer)
     const scored: Array<{ chunk_id: string; similarity: number }> = [];
     for (const row of vecRows) {
       let embedding: number[];
       try {
-        embedding = JSON.parse(row.embedding) as number[];
+        const buf = row.embedding as unknown as Buffer;
+        embedding = Array.from(new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4));
       } catch {
-        continue; // skip malformed vectors
+        continue;
       }
       if (embedding.length !== queryEmbedding.length) continue;
       const similarity = cosineFromL2(queryEmbedding, embedding);
-      scored.push({ chunk_id: row.chunk_id, similarity });
+      scored.push({ chunk_id: row.id, similarity });
     }
 
     if (scored.length === 0) return [];
 
     // Step 3: Build filter conditions for the SQL query
-    const conditions: string[] = ["m.deprecated = 0"];
+    const conditions: string[] = ["lc.deprecated = 0"];
     const params: unknown[] = [];
 
     if (filter.category) {
       if (Array.isArray(filter.category)) {
         const placeholders = filter.category.map(() => `?`).join(`, `);
-        conditions.push(`m.category IN (${placeholders})`);
+        conditions.push(`lc.category IN (${placeholders})`);
         params.push(...filter.category);
       } else {
-        conditions.push(`m.category = ?`);
+        conditions.push(`lc.category = ?`);
         params.push(filter.category);
       }
     }
     if (filter.status) {
-      conditions.push(`m.status = ?`);
+      conditions.push(`lc.status = ?`);
       params.push(filter.status);
     }
     if (filter.type) {
-      conditions.push(`m.type = ?`);
+      conditions.push(`lc.type = ?`);
       params.push(filter.type);
     }
     if (filter.deprecated !== undefined) {
-      conditions.push(`m.deprecated = ?`);
+      conditions.push(`lc.deprecated = ?`);
       params.push(filter.deprecated);
     }
 
     const filterClause = conditions.length > 0 ? conditions.join(` AND `) : `1=1`;
 
-    // Step 4: Build chunk_id IN (...) list
+    // Build id IN (...) list
     const chunkIds = scored.map((s) => s.chunk_id);
     const inClause = chunkIds.map(() => `?`).join(`, `);
 
@@ -483,21 +525,25 @@ export async function retrieveSemantic(
     if (includeContent) {
       rows = d
         .prepare(
-          `SELECT m.*, c.content, c.chunk_id, c.chunk_index
-           FROM memories m
-           JOIN chunks c ON c.parent_id = m.id AND c.deprecated = 0
-           WHERE c.chunk_id IN (${inClause}) AND ${filterClause}
-           ORDER BY m.updated_at DESC`
+          `SELECT lc.path, lc.category, lc.priority, lc.type, lc.status, lc.deprecated,
+                  lc.expires_at, lc.created_at, lc.updated_at,
+                  c.id as chunk_id, c.start_line, c.end_line, c.hash as chunk_hash, c.text as content
+           FROM remx_lifecycle lc
+           JOIN chunks c ON c.path = lc.path AND c.deprecated = 0
+           WHERE c.id IN (${inClause}) AND ${filterClause}
+           ORDER BY lc.updated_at DESC`
         )
         .all(...chunkIds, ...params) as RetrieveRow[];
     } else {
       rows = d
         .prepare(
-          `SELECT m.*, c.chunk_id, c.chunk_index
-           FROM memories m
-           JOIN chunks c ON c.parent_id = m.id AND c.deprecated = 0
-           WHERE c.chunk_id IN (${inClause}) AND ${filterClause}
-           ORDER BY m.updated_at DESC`
+          `SELECT lc.path, lc.category, lc.priority, lc.type, lc.status, lc.deprecated,
+                  lc.expires_at, lc.created_at, lc.updated_at,
+                  c.id as chunk_id, c.start_line, c.end_line
+           FROM remx_lifecycle lc
+           JOIN chunks c ON c.path = lc.path AND c.deprecated = 0
+           WHERE c.id IN (${inClause}) AND ${filterClause}
+           ORDER BY lc.updated_at DESC`
         )
         .all(...chunkIds, ...params) as RetrieveRow[];
     }
@@ -527,24 +573,24 @@ export async function retrieveSemantic(
       return 1.0; // knowledge, principle, etc.
     }
 
-    // Best chunk per memory_id
-    const bestPerMemory = new Map<string, RetrieveRow>();
+    // Best chunk per file path
+    const bestPerPath = new Map<string, RetrieveRow>();
     for (const row of rows) {
       const cid = row.chunk_id!;
-      const sid = row.id;
+      const sid = row.path;
       const sim = cosineMap.get(cid) ?? 0;
-      const dec = decayFactor(row.updated_at, row.expires_at as string | undefined, row.category);
+      const dec = decayFactor(row.updated_at ?? "", row.expires_at as string | undefined, row.category);
       const score = (1 - decayWeight) * sim + decayWeight * dec;
 
-      const existing = bestPerMemory.get(sid);
+      const existing = bestPerPath.get(sid);
       if (!existing || score > ((existing as unknown as { _score?: number })._score ?? -1)) {
         (row as unknown as { _score?: number })._score = score;
-        bestPerMemory.set(sid, row);
+        bestPerPath.set(sid, row);
       }
     }
 
     // Step 6: Sort by score DESC, apply limit
-    const results = Array.from(bestPerMemory.values());
+    const results = Array.from(bestPerPath.values());
     results.sort((a, b) => {
       const sa = (a as unknown as { _score?: number })._score ?? 0;
       const sb = (b as unknown as { _score?: number })._score ?? 0;

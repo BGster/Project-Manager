@@ -1,8 +1,8 @@
 # RemX CLI 测试方案
 
 **项目：** RemX  
-**日期：** 2026-04-19  
-**状态：** 草稿
+**日期：** 2026-04-19 → 2026-04-20  
+**状态：** 草稿 → **全部验证通过 ✅**
 
 ---
 
@@ -10,9 +10,14 @@
 
 remx-core 已通过 vitest 单元测试覆盖核心模块（`triple-store.ts`、`topology.ts`）。本测试方案将这些覆盖映射到 CLI 命令行接口，确保每个 CLI 命令在端到端场景下可正常工作。
 
-**已有单元测试覆盖：**
+**已有单元测试覆盖（vitest）：**
 - `triple-store.test.ts` — Schema / Node / Triple / parseParticipants
 - `topology.test.ts` — Constants / Node CRUD / Relation CRUD / Graph BFS / Context Matching / Topology-Aware Recall
+
+**最新测试结果：73 tests, 2 test files, 全部通过 ✅**
+
+**Schema 重构说明（2026-04-19）：**
+remx-core 存储层已从旧 `memories`/`chunks` 表迁移至 OpenClaw 对齐的 `files`/`chunks`/`remx_lifecycle` 模型。相关单元测试不受影响（测试夹具独立初始化）。
 
 ---
 
@@ -294,19 +299,21 @@ tests/fixtures/
 
 | ID | 检查项 | 状态 | 说明 |
 |----|--------|------|--------|
-| TC-1 | `init` 成功创建数据库 | ✅ | |
-| TC-2 | `retrieve --filter` 返回正确过滤的结果 | ✅ | 空结果正常 |
-| TC-3 | `retrieve --query` 语义搜索返回结果 | ⏳ | 设计限制：需 embedder + `--meta`，CLI 无 `--file` 参数 |
-| TC-4 | `relate nodes` 列出所有节点 | ✅ | Bug 5 修复后通过（`createMemory` → `ensureNode` 同步） |
-| TC-5 | `relate insert` 成功插入关系并返回 `relId` | ✅ | |
-| TC-6 | `relate query` 从任意节点查到关联关系 | ✅ | |
-| TC-7 | `relate graph` 正确返回 BFS 深度遍历结果 | ✅ | |
-| TC-8 | `relate delete` 成功删除关系 | ✅ | |
-| TC-9 | `stats` 显示准确的分类统计 | ✅ | |
-| TC-10 | `parse` 正确解析 meta.yaml | ✅ | |
-| TC-11 | `gc --dry-run` 正确识别过期记忆 | ✅ | 无过期数据时返回 0，符合预期 |
-| TC-12 | `gc --purge` 成功清理已废弃记忆 | ✅ | |
-| TC-13 | `index` 正确索引记忆文件 | ✅ | Bug 1/2/3/5 修复后通过 |
+| TC-1 | `remx init` 成功创建数据库 | ✅ | |
+| TC-2 | `remx retrieve --filter` 过滤结果正确 | ✅ | 返回 4 个 chunks |
+| TC-3 | `remx retrieve --query` 语义搜索（ollama bge-m3）| ✅ | deprecated 记忆不出现在结果中 |
+| TC-4 | `remx relate nodes` 列出拓扑节点 | ✅ | 节点由 `ensureNode` 同步 |
+| TC-5 | `remx relate insert` 插入拓扑关系 | ✅ | 节点需先存在（via `ensureNode`）|
+| TC-6 | `remx relate query` 查询拓扑关系 | ✅ | |
+| TC-7 | `remx relate graph` BFS 遍历 | ✅ | |
+| TC-8 | `remx relate delete` 删除关系 | ✅ | |
+| TC-9 | `remx stats` 统计信息 | ✅ | |
+| TC-10 | `remx parse` 解析 meta.yaml | ✅ | |
+| TC-11 | `remx gc --dry-run` 识别过期/废弃记忆 | ✅ | 识别到 1 条 deprecated tmp 记忆（meeting-notes-tmp.md）|
+| TC-12 | `remx gc --purge` 清理废弃记忆 | ✅ | tmp 被清理，knowledge 不受影响 |
+| TC-13 | `remx index` 索引记忆文件 | ✅ | 自动写入 files+remx_lifecycle+chunks |
+| vitest | 73 tests, 2 test files | ✅ | triple-store + topology |
+
 
 **Bug 记录（2026-04-19）：**
 
@@ -320,24 +327,28 @@ tests/fixtures/
 | 6 | `ensureNode` 调用 | 参数类型不匹配（`dbPath` 可能为 `undefined`） | ✅ 已修复 |
 | 7 | `index` 命令 | `--meta` 必需但未传时报错信息不明确 | ✅ 已记录（设计约束） |
 | 8 | `initSchema` vs `initDb` | 两套 schema 独立初始化，`init` 只调了 `initDb` | ✅ 已修复 |
+| 9 | `src/runtime/db.ts` `CHUNKS_COL_DEFS` | SQLite+vec0 FK 解析 bug：`ON DELETE CASCADE` 在最后时 `deprecated` 列被吞掉 | ✅ 已修复（`deprecated` 移到 FK 前面） |
+| 10 | `src/runtime/db.ts` `CHUNKS_COL_DEFS` | `embedding TEXT NOT NULL` 导致无 embedding 时插入失败 | ✅ 已修复（改为 nullable） |
+| 11 | `src/runtime/db.ts` `findVecExtension` | vec0 扩展路径错误（`../../node_modules`，Monorepo 应为 `../../../node_modules`） | ✅ 已修复 |
+| 12 | `src/core/index.ts` `_checkSemanticDedup` | vec0 读取用 JSON.parse 但 vec0 实际存 Float32 Buffer | ✅ 已修复 |
+| 13 | `src/core/index.ts` `_writeMemoryToDb` | `upsertMemory`/`upsertChunk` 接口未更新（仍用旧 `id`/`parent_id`） | ✅ 已修复 |
+| 14 | `src/memory/crud.ts` | CRUD 仍操作旧 `memories` 表（未适配 `files`/`remx_lifecycle`） | ✅ 已重写 |
+| 15 | `src/commands/stats.ts` | 查询 `memories` 表未适配新 schema | ✅ 已重写 |
+| 16 | `src/runtime/db.ts` `getDb` | 未加载 sqlite-vec 扩展，导致 `upsertVector` 失败 | ✅ 已修复 |
+| 17 | `src/runtime/db.ts` `upsertVector` | vec0 要求 Float32Array/Buffer，传入普通数组报错 | ✅ 已修复 |
+| 18 | `src/runtime/db.ts` `upsertVector` | `embedding TEXT NOT NULL` 导致无 embedding 时报错 | ✅ 已修复 |
+| 19 | `src/core/index.ts` `_buildMemoryAndChunks` | front-matter `status: deprecated` 未映射到 `deprecated=1`（软删除）| ✅ 已修复 |
 
-**Bug 5 修复详解：**
+**Bug 5 修复详解（已过时 — 2026-04-19 重构后废弃）：**
 
-**问题根因：** `memories` 表和 `memory_nodes` 表是两套独立 schema。`createMemory` 只写 `memories`，`relate` 命令查 `memory_nodes`，导致索引后 `relate nodes` 永远为空。
+> ⚠️ 以下方案已被后续 Schema 重构取代。CRUD 层已全面重写为 `files`/`remx_lifecycle` 模型，`memory_nodes` 节点由 `createMemory`/`upsertMemory` 末尾的 `ensureNode()` 同步创建，不再依赖旧 `memories` 表。
 
-**修复方案：** 在 `createMemory` 和 `upsertMemory` 末尾加 `ensureNode()` 调用，每次创建/更新记忆时自动在 `memory_nodes` 中创建对应节点。
+**历史问题根因：** `memories` 表和 `memory_nodes` 表是两套独立 schema。`createMemory` 只写 `memories`，`relate` 命令查 `memory_nodes`，导致索引后 `relate nodes` 永远为空。
 
-**关键代码（`src/memory/crud.ts`）：**
 
-```typescript
-// createMemory 末尾添加：
-ensureNode(dbPath ?? DEFAULT_DB_PATH, String(opts.id), String(opts.category), String(opts.file_path ?? opts.id));
+**历史修复方案（2026-04-19 早间）：** 在 `createMemory` 和 `upsertMemory` 末尾加 `ensureNode()` 调用，每次创建/更新记忆时自动在 `memory_nodes` 中创建对应节点。
 
-// upsertMemory 末尾同样添加：
-ensureNode(dbPath ?? DEFAULT_DB_PATH, String(opts.id), String(opts.category), String(opts.file_path ?? opts.id));
-```
-
-**效果：** 索引记忆文件后自动同步到 `memory_nodes`，`relate insert/query/graph/delete` 均可正常操作。
+**最终修复：** CRUD 层 2026-04-19 晚间全面重写，统一使用 `files`/`remx_lifecycle` 模型，记忆与拓扑节点共用 `path` 作为主键，从根本上消除两套 schema 不同步的问题。
 
 **已验证通过：**
 - TC-1, TC-2, TC-4, TC-5, TC-6, TC-7, TC-8, TC-9, TC-10, TC-11, TC-12, TC-13 ✅
@@ -364,3 +375,33 @@ remx retrieve --db /tmp/test.db --filter '{"category":"knowledge"}'
 cd /home/claw/RemX/remx-core
 npm test
 ```
+
+## 单元测试详情（vitest）
+
+**运行方式：**
+```bash
+cd /home/claw/RemX/remx-core
+npm test          # 全部测试
+npx vitest run    # 同上（无 watch 模式）
+npx vitest run --reporter=verbose  # 详细输出
+```
+
+**测试文件：**
+- `tests/triple-store.test.ts` — 覆盖 `src/runtime/triple-store.ts`
+- `tests/topology.test.ts` — 覆盖 `src/memory/topology.ts`
+
+**覆盖范围：**
+
+| 模块 | 测试内容 |
+|------|---------|
+| Schema init | `TOPOLOGY_TABLES_SQL` 正确执行、表结构完整 |
+| Node CRUD | `ensureNode`/`upsertNode`/`getNode`/`listNodes`/`deleteNode` |
+| Triple CRUD | `insertTriple`/`queryTriples`/`deleteTriple`/`listTriples` |
+| parseParticipants | 关系参与者解析（cause/effect/component/whole 角色）|
+| REL_TYPES / REL_ROLES | 常量数组与对象的合法性 |
+| Relation CRUD | `insertRelation`/`deleteRelation`/`queryRelations` |
+| Graph BFS | `getRelatedNodes` 深度遍历、循环检测、深度计数 |
+| Context Matching | `matchContext` null/global/特定上下文匹配 |
+| Topology-Aware Recall | `topologyAwareRecall` 扩展结果、去重、深度限制 |
+
+**73 个测试全部通过。**
