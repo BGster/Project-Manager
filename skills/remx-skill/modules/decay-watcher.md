@@ -33,7 +33,7 @@
    a. 构造 filter 查询条件
       e.g. trigger: {category: tmp, status: open}
       
-   b. remx retrieve --filter '<json>'
+   b. remx retrieve --db "$REMX_DB" --filter '<json>'
    
    c. 对每条 record 检查：
       - ttl: 剩余时间 = expires_at - now
@@ -48,7 +48,7 @@
 ```json
 [
   {
-    "memory_id": "TMP-xxx",
+    "path": "tmp/meeting-notes-2026-04-02.md",
     "category": "tmp",
     "title": "会议纪要 2026-04-02",
     "expires_at": "2026-04-03T10:00:00Z",
@@ -56,7 +56,7 @@
     "urgency": "normal"
   },
   {
-    "memory_id": "DEM-yyy",
+    "memory_id": "demands/auth-module.md",
     "category": "demand",
     "title": "认证模块决策",
     "stale_at": "2026-04-03T00:00:00Z",
@@ -82,9 +82,9 @@ remaining_hours > 72   → 不加入警告列表
 ```
 ⚠️ 记忆即将衰减（3 条）
 
-🔴 [critical] TMP-xxx "会议纪要 2026-04-02" — 剩余 4 小时
-🟡 [high] DEM-yyy "认证模块决策" — 剩余 12 小时（stale_after）
-🟡 [high] TMP-zzz "周报草稿" — 剩余 18 小时
+🔴 [critical] tmp/meeting-notes-2026-04-02.md "会议纪要 2026-04-02" — 剩余 4 小时
+🟡 [high] demands/auth-module.md "认证模块决策" — 剩余 12 小时（stale_after）
+🟡 [high] tmp/weekly-report-draft.md "周报草稿" — 剩余 18 小时
 
 如需保留，请更新文件后重新 index 以刷新 TTL。
 ```

@@ -1,106 +1,144 @@
 ---
 name: remx-skill
-description: RemX 项目记忆管理工具的 OpenClaw Skill 封装。
+description: RemX 项目记忆管理工具的 OpenClaw Skill 封装。适配 TypeScript CLI（remx-core），提供主动记忆召回/创建/更新能力。
 ---
 
 # RemX Skill
 
-项目记忆管理工具的 OpenClaw Skill 封装。
+RemX 是项目的外部记忆系统，通过向量检索 + 拓扑图 + 衰减机制，让 AI 在任意时刻都能快速理解项目上下文。
 
-## 定位
+**本 Skill 基于 TypeScript CLI（remx-core）**，所有记忆操作必须通过 `remx <cmd>` 命令，禁止直接调用源码。
 
-RemX 通过向量检索 + 衰减机制，让 AI 在任意时刻都能快速理解项目上下文。它是**项目的外部记忆系统**，不是代码库的一部分。
+---
 
 ## 核心概念
 
 | 概念 | 说明 |
 |------|------|
-| **memory** | 一个文件的唯一记录，含元数据 + 多个 chunk |
-| **chunk** | 按标题层级切分的语义单元，每个 H1/H2/H3 是一个 chunk |
-| **content_hash** | chunk 内容的 SHA256 前16位；re-index 时内容不变则跳过 embedding |
-| **decay** | 配了 decay_group 的记忆按 TTL/stale_after 自动衰减；never 类永不过期 |
-| **语义检索** | `--query` 触发向量检索，按 `cosine_similarity × decay_factor` 排序 |
-| **拓扑关系** | 记忆之间的因果/相关性连接，支持上下文感知的图遍历召回 |
+| **memory / 记忆** | 一个文件的唯一记录，含元数据（category/priority/status） + 多个 chunk |
+| **chunk** | 按标题层级（H1/H2/H3）切分的语义单元 |
+| **path（记忆 ID）** | 文件路径即为记忆 ID，直接用于 `remx retrieve` 和 `remx relate` |
+| **chunk_id** | 格式：`{index_scope}::{path}::{chunk_index}`，如 `project::demands/auth.md::0` |
+| **decay** | 按 category 所属 decay_group 自动衰减；`tmp` 24h、`demand` 168h、`knowledge` never |
+| **语义检索** | `remx retrieve --query` 触发向量检索（ollama bge-m3）|
+| **拓扑关系** | 记忆之间的因果/相关性连接，支持 BFS 图遍历扩展召回 |
 
-## 内置衰减默认值
+---
 
-meta.yaml 无显式配置时自动应用：
+## 衰减默认值（meta.yaml 无显式配置时）
 
-| category | 默认衰减 | 说明 |
-|----------|---------|------|
-| tmp | ttl=24h | 临时笔记 |
-| demand | stale_after=90d | 设计决策 |
-| issue | stale_after=60d | 问题/bug |
-| knowledge | never | 知识积累 |
-| principle | never | 原则规范 |
+| category | decay function | 说明 |
+|----------|---------------|------|
+| `tmp` | `ttl` 24h | 临时笔记 |
+| `demand` | `stale_after` 168h | 设计决策 |
+| `issue` | `stale_after` 720h | 问题/bug |
+| `knowledge` | `never` | 知识积累 |
+| `principle` | `ttl` 8760h | 原则规范 |
 
-## CLI 命令（8个）
+---
+
+## CLI 命令（7个）
+
+所有操作均通过 `remx <cmd>` 执行，详细用法见 `references/remx-cli-commands.md`。
 
 | 命令 | 功能 |
 |------|------|
-| `remx init` | 初始化/重建数据库 |
-| `remx index` | 索引单个文件（含 --dedup-threshold 语义去重）|
-| `remx retrieve` | 过滤/语义检索（--query --decay-weight）|
-| `remx gc` | 软删除过期 + 物理清理 deprecated |
-| `remx stats` | 数据库健康统计 |
-| `remx parse` | 验证 meta.yaml |
-| `remx relate` | 拓扑关系管理（节点/关系增删查/图遍历/语义扩展）|
-| `remx version` | 输出版本 |
+| `remx init` | 初始化数据库（`files`/`chunks`/`remx_lifecycle` 表）|
+| `remx index` | 索引单个文件，自动写入 front-matter 指定的 category/status |
+| `remx retrieve` | 过滤模式或语义模式检索 |
+| `remx gc` | 软删除过期 + 物理清理 deprecated 记忆 |
+| `remx stats` | 数据库统计（活跃/废弃记忆数、分类分布）|
+| `remx parse` | 验证 meta.yaml 配置 |
+| `remx relate` | 拓扑关系管理（nodes/insert/query/graph/delete）|
 
-完整用法见 `references/remx-cli-user-guide.md`。
+---
 
-## Hook 行为
+## 主动性规范（Skill 层核心设计）
 
-`remx` hook 完全基于语义自主决策，**无需任何触发词**：
+RemX Skill 的记忆操作由 Agent **主动决策**，无需用户显式提醒。
 
-### 分析维度
-- **上下文相关性**：讨论是否涉及项目内容（架构、方案、决策、技术术语）
-- **记忆价值**：内容是否包含新决策、结论、解决方案或修正信息
-- **Topic 延续**：是否在延续之前的讨论话题
+### 触发分析（每次 Agent 回答前自动执行）
 
-### 决策结果（对用户透明）
-| 决策 | 触发条件 | 用户感知 |
-|------|---------|---------|
-| 召回记忆 | 上下文涉及项目相关讨论 | Agent 自然引用，无额外提示 |
-| 创建记忆 | 输出了新决策/结论/方案 | 回答末尾附上 `📚 召回: ... ｜ 🆕 新建: ...` |
-| 更新记忆 | 修正或补充已有记忆 | 回答末尾附上 `🔄 更新: ...` |
+Agent 在生成回答前，先分析当前上下文：
 
-### 用户感知方式
-Hook 操作记忆后，在 Agent 回答**末尾**追加一行摘要：
+**相关性分析：**
+- 讨论是否涉及项目内容（架构、方案、决策、技术术语、文件名、模块名）
+- 区分"闲聊"和"项目相关讨论"
+
+**记忆价值分析：**
+- 是否输出了新决策、结论、解决方案
+- 是否发现了现有记忆的错误或过时内容
+- 是否提出了新的待办、问题或想法
+
+**Topic 延续分析：**
+- 是否在延续之前的讨论话题
+- 是否需要引用已有的记忆内容
+
+### 决策结果
+
+| 决策 | 触发条件 | Agent 行为 |
+|------|---------|-----------|
+| **RECALL** | 上下文涉及项目相关内容 | 自然引用相关记忆，不额外提示 |
+| **CREATE** | 输出了新决策/结论/方案 | 在回答末尾追加 `🆕 新建: <path>` 摘要 |
+| **UPDATE** | 发现记忆内容与事实不符 | 在回答末尾追加 `🔄 更新: <path>` 摘要 |
+| **NONE** | 无相关记忆操作 | 不显示摘要 |
+
+### 主动触发场景（无需用户提醒）
+
+| 场景 | 自动操作 |
+|------|---------|
+| 会话开始时 | 检查快到期记忆（`remx gc --dry-run`），提醒用户 |
+| 讨论项目架构/方案时 | 自动召回相关记忆，自然融入回答 |
+| 输出了技术决策时 | 自动创建 demand 记忆 |
+| 发现 bug/问题时 | 自动创建 issue 记忆 |
+| 记忆内容与事实不符时 | 自动更新记忆 |
+| 讨论中引用了某条记忆 | 自动建立拓扑关系（相关性）|
+
+---
+
+## 输出规范：答案末尾的参考摘要
+
+当有记忆操作时，在 Agent 回答**末尾**追加一行摘要（无操作时省略）：
+
 ```
 ---
-📚 召回: DEM-001, DEM-002 ｜ 🆕 新建: TMP-003
+📚 召回: path/to/demand-001.md, issues/bug-auth.md
+🆕 新建: demands/session-token.md
+🔄 更新: demands/auth-module.md
+🔗 拓扑: demands/auth-module.md → issues/bug-auth.md (因果关系)
 ```
 
-用户始终看到的是自然的对话，只有在有记忆操作时才会看到这一行。
+**各字段说明：**
+
+| 字段 | 含义 |
+|------|------|
+| `📚 召回` | 本次回答中引用的记忆路径列表 |
+| `🆕 新建` | 本次新建的记忆路径 |
+| `🔄 更新` | 本次更新的记忆路径 |
+| `🔗 拓扑` | 本次新建的拓扑关系（格式：`A → B (关系类型)`）|
+
+**注意：** 用户始终看到自然的对话；摘要行仅当有操作时出现。
+
+---
 
 ## Skill 组件（modules/）
 
 | 组件 | 职责 |
 |------|------|
-| **MemoryManager** | 核心大脑：语义分析 + 自主决策 + 协调各模块 |
-| **MemoryFileManager** | 写 / 更新 / 删除记忆文件，联动 remx index |
-| **ChunkSplitter** | 验证 heading 结构，预览切分结果 |
-| **ContextAssembler** | 检索记忆并组装成 LLM 可用的上下文 |
-| **DecayWatcher** | 检查衰减阈值，对快到期的记忆发出提醒 |
+| **MemoryManager** | 核心决策引擎：语义分析 + 自主决策 + 协调各模块 |
+| **ContextAssembler** | `remx retrieve` 召回 + 组装 LLM 可用上下文 |
+| **DecayWatcher** | 检查衰减阈值，对快到期记忆发出提醒 |
+| **MemoryFileManager** | 写 / 更新 / 删除记忆文件，联动 `remx index` |
 
-详细接口文档 → `modules/`。
+详细接口文档见各 `modules/*.md` 文件。
 
-## 拓扑关系（Topology）
+---
+
+## 拓扑关系
 
 RemX 通过拓扑关系将相关记忆连接成图，实现上下文感知的图遍历召回。
 
-### 核心概念
-
-| 概念 | 说明 |
-|------|------|
-| **memory_node** | 一条记忆的图节点，含 id/category/chunk |
-| **memory_relation** | 关系记录，含 rel_type/context/description |
-| **memory_relation_participants** | 参与者的角色（cause/effect/component/whole/related/opponent）|
-| **context** | 上下文标签，NULL=全局无条件匹配 |
-| **topology_aware_recall** | 拓扑增强检索：语义结果经 BFS 图扩展，发现语义未命中但结构相关的信息 |
-
-### 支持的关系类型
+### 关系类型
 
 | rel_type | 说明 |
 |----------|------|
@@ -111,173 +149,100 @@ RemX 通过拓扑关系将相关记忆连接成图，实现上下文感知的图
 | `组成性` | A 是 B 的组件 / B 是 A 的整体 |
 | `依赖性` | A 依赖 B |
 
-### Context 过滤机制
+### Context 过滤
 
-relation 的 context 决定何时可用：
+relation 的 `context` 字段决定何时可用：
 - `NULL`（全局）→ 所有上下文都匹配
-- `group_chat` → 仅在 `group_chat` 上下文中匹配
-- `main_session` → 仅在 `main_session` 上下文中匹配
+- `global` → 全局无条件匹配
+- `main_session` → 仅在主会话上下文匹配
+- `group_chat` → 仅在群聊上下文匹配
 
-检索时传入 `--current-context` 参数按上下文过滤。
-
-**匹配规则（`match_context`）：**
-```python
-def match_context(relation_context: Optional[str], current: Optional[str]) -> bool:
-    if relation_context is None or relation_context == DEFAULT_CONTEXT:
-        return True   # NULL 或 "global" → 全局无条件匹配
-    return relation_context == current  # 精确匹配上下文标签
+**匹配规则：**
+```
+relation.context == NULL || relation.context == "global" → 始终匹配
+relation.context == current_context → 精确匹配
+otherwise → 不匹配
 ```
 
-**示例：**
-| relation.context | current_context | 结果 |
-|-----------------|-----------------|------|
-| `NULL` | `main_session` | ✅ 匹配（全局）|
-| `NULL` | `group_chat` | ✅ 匹配（全局）|
-| `global` | 任意 | ✅ 匹配（全局）|
-| `main_session` | `main_session` | ✅ 匹配 |
-| `main_session` | `group_chat` | ❌ 不匹配 |
-| `group_chat` | `main_session` | ❌ 不匹配 |
+### 拓扑增强检索流程
 
-### 拓扑增强的语义检索（topology_aware_recall）
-
-语义搜索找到的是字面相关记忆；拓扑扩展在此基础上，通过关系图发现语义未命中但结构相关的信息。
-
-**算法流程：**
-1. 语义搜索返回一批命中结果（每条含 `id` 或 `memory_id`）
-2. 对每个命中节点执行 BFS 图遍历（默认 2 跳），收集可达节点
-3. 去重后最多返回 10 条拓扑扩展结果（均标记 `source: "topology"`）
-
-**使用方式：**
-```bash
-# 语义搜索 → 拓扑扩展管道
-remx retrieve --query "认证模块" --db ./memory.db --meta ./meta.yaml > base.json
-cat base.json | remx relate expand --db ./memory.db --current-context main_session
+```
+1. 语义搜索：remx retrieve --query "认证模块" → 基础结果集
+2. 拓扑扩展：对结果中每条记忆执行 BFS 图遍历 → 扩展结果集
+3. 合并去重：基础结果 + 拓扑扩展结果合并 → 最终结果
 ```
 
-**扩展参数：**
-- `--max-depth`：BFS 最大深度（默认 2，值越大范围越广但噪声越多）
-- `--max-additional`：最多扩展多少条拓扑结果（默认 10）
-
-**返回格式差异：**
-- 语义命中：`{id, category, chunk, score}`
-- 拓扑扩展：`{id, category, chunk, source: "topology", depth: N}`
-
-### 使用场景
-
-- **因果链追溯**：`remx relate graph --node-id <A> --max-depth 3` 追溯 A 导致 B 导致 C
-- **跨记忆关联**：两条原本独立的需求有共同的底层依赖，拓扑连接后一次检索全部召回
-- **上下文隔离**：group_chat 中的关系不对 main_session 暴露
-- **语义盲区补充**：某记忆在向量空间中与查询距离远，但通过拓扑图直接相连，扩展检索可命中
-
-## 拓扑模块 Python API
-
-`remx.core.topology` 导出以下公共函数，可直接调用：
-
-| 函数 | 说明 |
-|------|------|
-| `ensure_node(db_path, node_id, category, chunk)` | 插入或忽略一个节点（幂等） |
-| `list_nodes(db_path, category=None)` | 列出节点，可按 category 过滤 |
-| `insert_relation(db_path, rel_type, node_ids, roles, context=None, description=None)` | 原子插入关系 + 参与者 |
-| `delete_relation(db_path, relation_id)` | 删除关系（级联删除参与者） |
-| `query_relations(db_path, node_id, current_context=None)` | 查询某节点所有关系（含上下文过滤） |
-| `get_related_nodes(db_path, node_id, current_context=None, max_depth=2)` | BFS 图遍历，返回可达节点图 |
-| `topology_aware_recall(db_path, base_results, current_context=None, max_depth=2, max_additional=10)` | 语义结果 + 拓扑扩展合并 |
-| `match_context(relation_context, current)` | 判断某条 relation 是否在当前上下文可用 |
-
-**使用示例：**
-```python
-from pathlib import Path
-from remx.core.topology import insert_relation, topology_aware_recall
-
-db = Path("memory.db")
-
-# 建立因果链
-insert_relation(db, "因果关系", ["DEM-001", "DEM-002"], ["cause", "effect"])
-insert_relation(db, "因果关系", ["DEM-002", "DEM-003"], ["cause", "effect"])
-
-# 程序化拓扑扩展检索
-base = [{"id": "DEM-001", "chunk": "...", "category": "demand"}]
-expanded = topology_aware_recall(db, base, current_context="main_session", max_depth=2)
-# expanded 包含语义命中 + 拓扑扩展节点，拓扑节点标记 source="topology"
-```
+---
 
 ## 记忆书写规范
 
 详见 `references/memory-writing-guide.md`，核心规则：
 
 - **分块**：每个 chunk 最大 360 字（约 H1-H3 一个章节）
-- **链接**：关联记忆末尾添加双向链接 `标题1 <--> 标题2`
+- **标题**：每个 chunk 以 H1/H2/H3 标题开头
+- **front-matter**：必须包含 `category`，可选 `priority`/`status`/`type`
+- **双向链接**：关联记忆末尾添加 `标题1 <--> 标题2`
 - **稀疏链接**：仅严格依赖关系才链接，避免全连接
-- **中转块**：功能记忆块链接超过 3 条时，通过中转记忆块组织
+
+---
 
 ## 快速开始
 
 ```bash
 # 初始化
-remx init --reset --db ./memory.db --meta ./meta.yaml
+remx init --db ./memory.db --meta ./meta.yaml
 
-# 索引
-remx index <file> --db ./memory.db --meta ./meta.yaml
+# 索引记忆文件
+remx index demands/auth-module.md --db ./memory.db --meta ./meta.yaml
 
-# 检索
-remx retrieve --filter '{"category": "demand"}' --db ./memory.db --no-embed
+# 过滤检索
+remx retrieve --filter '{"category":"demand","status":"open"}' --db ./memory.db
 
 # 语义搜索
-remx retrieve --query "认证模块是怎么实现的" --db ./memory.db --meta ./meta.yaml --decay-weight 0.5
+remx retrieve --query "认证模块是怎么实现的" --db ./memory.db --meta ./meta.yaml
 
-# 拓扑关系：建立两条记忆的因果关系
-remx relate insert --node-id <id1>,<id2> --rel-type 因果关系 --roles cause,effect --context main_session
+# 建立拓扑关系
+remx relate insert --db ./memory.db --nodes demands/auth.md,issues/bug-auth.md \
+  --rel-type 因果关系 --roles cause,effect --context main_session
 
-# 拓扑关系：查看某记忆的关联图
-remx relate graph --node-id <id> --db ./memory.db
+# 查看拓扑图
+remx relate graph --db ./memory.db --node-id demands/auth.md
 
 # 健康检查
-remx stats --db ./memory.db --meta ./meta.yaml
+remx stats --db ./memory.db
+
+# GC
+remx gc --db ./memory.db --dry-run
+remx gc --db ./memory.db --purge
 ```
 
-## Skill 协作流程
-
-```
-用户/Agent 说"记住这个决定"
-  → ChunkSplitter.validate() — 检查 heading 结构
-  → MemoryFileManager.write() — 写文件 + front-matter + remx index
-  → DecayWatcher.check() — 检查衰减，快到期则提醒
-
-用户/Agent 说"我之前关于 X 的决定是什么"
-  → ContextAssembler.assemble() — remx retrieve → 组装上下文 → 返回
-
-用户/Agent 说"项目状态怎么样"
-  → ContextAssembler.by_filter({category: "demand", status: "open"})
-  → DecayWatcher.check() — 报告快过期记忆
-
-用户/Agent 说"这两条记忆有什么关系"
-  → remx relate query --node-id <id> --current-context <ctx>
-  → 返回拓扑关系列表
-
-用户/Agent 说"语义检索并扩展拓扑"
-  → remx retrieve --query "..." | remx relate expand --current-context <ctx>
-  → 语义结果 + 拓扑扩展结果合并返回
-```
-
-## 触发时机
-
-| 场景 | 操作 |
-|------|------|
-| 用户做了技术决策 | 写一条 `demand` 记忆 |
-| 发现了一个问题 | 写一条 `issue` 记忆 |
-| 临时想法/会议记录 | 写一条 `tmp` 记忆（自动 24h 后衰减）|
-| 重要知识积累 | 写一条 `knowledge` 记忆（永不过期）|
-| 需要回顾项目上下文 | `ContextAssembler` 检索相关记忆 |
-| 每次索引新文件后 | `DecayWatcher` 检查衰减阈值，提醒清理 |
-| 发现两条记忆有关联 | `remx relate insert` 建立拓扑关系 |
-| 需要程序化操作拓扑 | 直接调用 `remx.core.topology` Python API |
+---
 
 ## 配置
 
-主要配置在 `meta.yaml`，参考 `references/remx-cli-user-guide.md#metayaml-配置参考`。
+主要配置在 `meta.yaml`，参考 `references/remx-cli-commands.md#衰减策略metayaml-decay_groups`。
 
 关键项：
 - `index_scope` — 定义哪些路径算项目记忆
-- `decay_groups` — 定义各类记忆的衰减规则（TTL / stale_after / never）
+- `decay_groups` — 定义各类记忆的衰减规则
 - `chunk.strategy` — `heading`（默认）或 `paragraph`
-- `embedder` — 向量嵌入配置（用于语义检索）
+- `embedder` — 向量嵌入配置（用于语义检索，provider=ollama/model=bge-m3）
+
+---
+
+## 文件结构
+
+```
+remx-skill/
+├── SKILL.md                          ← 本文件
+├── modules/
+│   ├── memory-manager.md             ← 核心决策引擎
+│   ├── context-assembler.md         ← 召回 + 组装
+│   ├── memory-file-manager.md        ← 写/更新/删除文件
+│   └── decay-watcher.md             ← 衰减检查
+├── references/
+│   ├── remx-cli-commands.md         ← CLI 命令速查（TypeScript 版本）
+│   └── memory-writing-guide.md       ← 记忆书写规范
+└── scripts/
+    └── skill-integration.ts          ← OpenClaw 集成脚本
+```

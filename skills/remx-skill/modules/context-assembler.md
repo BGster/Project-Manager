@@ -1,135 +1,153 @@
 # ContextAssembler
 
-将 `remx retrieve` 的检索结果组装成 LLM 可直接使用的上下文文本。只读不写。
+将 `remx retrieve` 的检索结果组装成 LLM 可直接使用的上下文文本。**只读不写。**
+
+---
 
 ## 核心职责
 
-- 接收用户的自然语言问题
-- 构造合适的 filter 调用 `remx retrieve`
+- 接收查询意图（自然语言问题或结构化 filter）
+- 构造合适的 `remx retrieve` 命令（过滤模式或语义模式）
 - 将 JSON 结果格式化为连贯的上下文文本
 - 返回给 Agent 用于生成回答
 
+---
+
 ## 操作接口
 
-### assemble(query, options?) → string
+### `assemble(query, options?) → string`
 
-**触发场景：** 用户问"我之前关于 X 的决定是什么"、"项目里有哪些 open 的 issue"
+**触发场景：** Agent 分析上下文时自动调用，无需用户提醒。
 
-**动作流程：**
-```
-1. 解析 query，提取关键实体和意图
-     - 实体：X 是什么（关键词）
-     - 意图：查 demand？查 issue？查所有？
+```bash
+# 语义模式（推荐，自动判断意图）
+remx retrieve \
+  --db "$REMX_DB" \
+  --meta "$REMX_META" \
+  --query "认证模块是怎么实现的" \
+  --limit 10 \
+  --decay-weight 0.3
 
-2. 构造 filter
-     e.g.
-     query: "关于认证模块的决定"
-     → 先用 --query 语义搜索（自动返回相关记忆）
-     
-     query: "所有 open 的 bug"
-     → { "category": "issue", "status": "open", "type": "bug" }
-
-3. 调用 remx retrieve
-     # 语义模式
-     remx retrieve --query '<query>' --db <db> --meta <meta.yaml> [--decay-weight 0.5]
-     # 过滤模式
-     remx retrieve --filter '<json>' --db <db> [--limit 20] [--no-embed]
-
-4. 组装上下文文本
-     格式：
-     ## 记忆上下文（{count} 条）
-
-     [{chunk 1 heading}]
-     {chunk 1 content}
-
-     ---
-
-     [{chunk 2 heading}]
-     {chunk 2 content}
-
-     ---
-
-     ...
-
-5. 返回文本
-     → 直接塞进 LLM prompt 的上下文字段
+# 过滤模式
+remx retrieve \
+  --db "$REMX_DB" \
+  --filter '{"category":"demand","status":"open"}' \
+  --limit 20
 ```
 
-### by_category(category, options?) → string
-
-**触发场景：** 显式指定 category 检索
-
+**返回值格式：**
 ```
-用户: "列出所有需求"
-→ assemble(query="所有需求", options={category: "demand", require_content: true})
-```
+## 记忆上下文（{count} 条）
 
-### by_filter(filter_json, options?) → string
-
-**触发场景：** 高级用户或系统内部使用，直接传 filter JSON
-
-```
-remx retrieve --filter '{"category":"demand","priority":"P0","status":"open"}'
-```
-
-### format_single(memory_record) → string
-
-将单条 memory + 其 chunks 格式化为文本，用于展示详情：
-
-```
-## {title}
-
-**ID:** DEM-xxx
-**Category:** demand
-**Priority:** P1
-**Status:** open
-**Created:** 2026-04-01
+[{chunk 1 标题}]
+{chunk 1 正文}
 
 ---
 
-{chunk content 1}
+[{chunk 2 标题}]
+{chunk 2 正文}
 
 ---
 
-{chunk content 2}
+...
 ```
+
+### `by_category(category, options?) → string`
+
+**触发场景：** 显式指定 category 检索。
+
+```bash
+remx retrieve --db "$REMX_DB" --filter "{\"category\":\"demand\"}" --limit 50
+```
+
+### `by_filter(filter_json, options?) → string`
+
+**触发场景：** 高级场景，直接传 filter JSON。
+
+```bash
+remx retrieve --db "$REMX_DB" --filter '{"category":"issue","priority":"P0","status":"open"}' --limit 20
+```
+
+---
+
+## 过滤条件参考
+
+| filter 条件 | 说明 |
+|------------|------|
+| `{"category": "demand"}` | 所有设计决策 |
+| `{"category": "demand", "status": "open"}` | 进行中的决策 |
+| `{"category": "issue", "type": "bug"}` | 所有 bug |
+| `{"category": "knowledge"}` | 知识积累 |
+| `{"deprecated": 0}` | 未废弃的记忆 |
+| `{"category": "tmp", "status": "open"}` | 活跃的临时记忆 |
+
+---
 
 ## 上下文组装策略
 
 ### 截断策略
 
-若所有 chunks 加起来的 token 数超过 LLM context 的预留空间（建议 ≤ 8k tokens），按优先级截断：
+若所有 chunks 的 token 数超过 LLM context 预留空间（建议 ≤ 8k tokens），按优先级截断：
 
-```
-优先级顺序：
-1. 最新创建的（created_at 降序）
-2. chunk 内嵌的 heading 层级（越高越重要）
-3. 用户 query 中关键词匹配度
-```
+1. 最新创建的排前面（`created_at` 降序）
+2. chunk 内嵌的 heading 层级越高越重要
+3. 用户 query 中关键词匹配度越 高越重要
 
 ### 多 chunk 拼接规则
 
-同一个 memory 的多个 chunks：
-- 按 `chunk_index` 升序拼接
-- chunk 之间用 `\n\n---\n\n` 分隔
-- 同一个 memory 的 chunks 始终在一起
+- 同一个 memory 的多个 chunks：按 `chunk_id` 中的 `chunk_index` 升序拼接，chunk 之间用 `\n\n---\n\n` 分隔
+- 不同 memory 之间：按 `created_at` 降序排列（最新的在前），memory 之间用 `\n\n=======\n\n` 分隔
 
-不同 memory 之间：
-- 按 `created_at` 降序排列（最新的在前）
-- memory 之间用 `\n\n=======\n\n` 分隔
+---
 
 ## 降级处理
 
 | 场景 | 降级行为 |
-|------|----------|
-| `remx retrieve` 返回空 | 返回"未找到相关记忆" |
-| `remx retrieve` 超时 | 返回"检索超时，请稍后重试" |
-| embedding 服务不可用 | `remx retrieve` 会返回 LIKE 文本搜索结果（可接受） |
+|------|---------|
+| `remx retrieve` 返回空 | 返回空字符串（不代表错误）|
+| vec0 扩展不可用 | `remx retrieve --filter` 仍可用（文本过滤）|
+| ollama 不可用（`--query` 模式）| 降级为 `--filter` 模式的文本搜索 |
+| `remx retrieve` 超时 | 返回空字符串 |
+
+---
 
 ## 错误处理
 
 | 场景 | 返回 |
 |------|------|
-| 检索失败（db 不存在） | "RemX 未初始化，请先运行 `remx init`" |
-| filter JSON 格式错误 | "检索条件格式错误" |
-| 零结果 | "没有找到匹配的记录" |
+| 数据库不存在 | 空字符串（Agent 自行判断"RemX 未初始化"）|
+| filter JSON 格式错误 | 空字符串 + 警告日志 |
+| 零结果 | 空字符串 |
+
+---
+
+## 使用示例
+
+### 场景 1：Agent 讨论项目架构时自动召回
+
+```
+用户: "认证模块的方案是怎么考虑的"
+→ Agent 调用 assemble("认证模块 方案", {category: "demand"})
+→ 返回相关记忆上下文
+→ Agent 自然引用这些记忆回答
+```
+
+### 场景 2：会话开始时检查快过期记忆
+
+```bash
+remx gc --db "$REMX_DB" --dry-run
+```
+
+---
+
+## 与 MemoryManager 的协作
+
+```
+MemoryManager 分析上下文
+    ↓ 判断需要召回记忆
+ContextAssembler.assemble()
+    ↓ 返回格式化上下文
+MemoryManager 将上下文注入 Agent prompt
+    ↓
+Agent 生成回答
+```

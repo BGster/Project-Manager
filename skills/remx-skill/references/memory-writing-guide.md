@@ -90,22 +90,29 @@ Token 存储在 httpOnly Cookie 中，有效期 24 小时。
 
 ```markdown
 ---
-category: demand        # demand | issue | tmp（必填）
-priority: P1          # P0/P1/P2（可选）
-status: open          # open | in_progress | closed（可选）
+category: demand        # demand | issue | knowledge | principle | tmp（必填）
+priority: P1          # P0/P1/P2/P3（可选）
+status: open          # open | closed | archived | deprecated（可选）
 type: bug             # 任意字符串（可选）
 created_at: "2026-04-01T10:00:00Z"  # ISO 8601（可选，默认当前时间）
+expires_at: "2026-04-25T00:00:00Z"  # ISO 8601（可选，通常由 decay_group 自动计算）
 ---
 # 标题
 ```
 
+**重要：`status: deprecated` 触发软删除**
+
+front-matter 中写 `status: deprecated`，索引时（`remx index`）会自动将该记忆标记为 `deprecated=1`，后续检索不再出现，直到被 `remx gc --purge` 物理删除。
+
 **category 说明：**
 
-| 值 | 含义 | 衰减 |
-|----|------|------|
-| `demand` | 需求、设计决策 | 无 |
-| `issue` | 问题、bug | 无 |
-| `tmp` | 临时笔记 | TTL=1h（按 decay_groups）|
+| 值 | 含义 | 衰减（默认）|
+|----|------|------------|
+| `demand` | 设计决策、需求 | stale_after 168h（每次 index 刷新）|
+| `issue` | 问题、bug、风险 | stale_after 720h |
+| `knowledge` | 知识积累、技术原理 | never（永不过期）|
+| `principle` | 原则、规范 | ttl 8760h |
+| `tmp` | 临时笔记 | ttl 24h |
 
 ---
 
