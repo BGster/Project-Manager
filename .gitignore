@@ -214,3 +214,19 @@ marimo/_lsp/
 __marimo__/
 remx-cli/src/__pycache__/
 remx-cli/src/remx/__pycache__/
+
+# =========================================
+# RemX v0.3.0 refactor cleanup
+# =========================================
+
+# Node.js dependencies
+node_modules/
+package-lock.json
+
+# TypeScript build output
+remx-core/dist/
+remx-core/node_modules/
+
+# Vite build cache
+.vite/
+remx-core/.vite/
