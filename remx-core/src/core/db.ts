@@ -28,7 +28,10 @@ function getVecPackageName(): string {
 
 /** Extension filename for the current platform. */
 function getVecExtName(): string {
-  return platform() === "win32" ? "vec0.dll" : "vec0.so";
+  const p = platform();
+  if (p === "win32") return "vec0.dll";
+  if (p === "darwin") return "vec0.dylib";
+  return "vec0.so";
 }
 
 // ─── Extension loader ─────────────────────────────────────────────────────────
