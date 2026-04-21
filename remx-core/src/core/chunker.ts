@@ -96,7 +96,7 @@ export function countTokens(text: string): number {
 
 // ─── Splitting ───────────────────────────────────────────────────────────────
 
-const HEADING_RE = /^#{1,6}\s+(.+)$/;
+const HEADING_RE = /^(#{1,6})\s+(.+)$/;
 const SENTENCE_END_RE = /[。？！；\n]/;
 
 export function splitParagraphs(text: string): string[] {
