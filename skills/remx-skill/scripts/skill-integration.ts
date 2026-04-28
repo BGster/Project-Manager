@@ -281,5 +281,5 @@ export function formatSummary(op: MemoryOpSummary): string {
     parts.push(`🔗 拓扑: ${op.topology}`);
   }
   if (parts.length === 0) return "";
-  return `---\n${parts.join("\n")}`;
+  return `---\n\n${parts.join("\n")}`;
 }
